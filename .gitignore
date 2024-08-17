@@ -1,0 +1,10 @@
+*
+!.gitignore
+
+!.dockerignore
+!docker-compose.yml
+!Dockerfile
+
+!bun.lockb
+!package.json
+!main.ts
