@@ -5,7 +5,6 @@ import {
   Message,
   VoiceBasedChannel,
 } from "discord.js";
-import ytdl from "@distube/ytdl-core";
 import {
   joinVoiceChannel,
   createAudioPlayer,
@@ -15,18 +14,7 @@ import {
 } from "@discordjs/voice";
 
 import fs from "fs";
-
-const agentOptions = {
-  pipelining: 5,
-  maxRedirections: 10,
-  headers: {
-    referer: "https://www.youtube.com/",
-  },
-};
-const agent = ytdl.createAgent(
-  JSON.parse(fs.readFileSync("cookies.json").toString()),
-  agentOptions,
-);
+import { $ } from "bun";
 
 console.log("Starting...");
 console.log(generateDependencyReport());
@@ -61,9 +49,10 @@ client.on("messageCreate", async (message: Message) => {
 
   if (command === "play") {
     const url = args[0];
-    if (!ytdl.validateURL(url)) {
-      return message.channel.send("Send a valid YouTube URL");
-    }
+    // TODO: add validation
+    // if (!ytdl.validateURL(url)) {
+    //   return message.channel.send("Send a valid YouTube URL");
+    // }
 
     await handlePlay(
       message.member.voice.channel,
@@ -94,23 +83,27 @@ async function handlePlay(
 
   if (player.state.status === "playing") {
     queue.push(url);
-    const videoTitle = (await ytdl.getInfo(url, { agent })).videoDetails.title;
-    await textChannel.send(`Queued **${videoTitle}**`);
+    // TODO: extract video title with yt-dlp
+    // const videoTitle = (await ytdl.getInfo(url, { agent })).videoDetails.title;
+    // await textChannel.send(`Queued **${videoTitle}**`);
+    await textChannel.send(`Queued the song`);
     return;
   }
 
   try {
-    const stream = ytdl(url, {
-      filter: "audioonly",
-      highWaterMark: 1 << 25,
-      agent,
-    });
-
+    // TODO: ideally i don't want to save the file to disk
+    // there is probably also a shell escaping vulnerability here somewhere
+    console.log(`Downloading: ${url}`);
+    await $`yt-dlp --extract-audio --audio-format opus -o "/tmp/song.%(ext)s" -- "${url}"`;
+    const stream = fs.createReadStream("/tmp/song.opus");
     const resource = createAudioResource(stream);
     player.play(resource);
+    await $`rm /tmp/song.opus`;
 
-    const videoTitle = (await ytdl.getInfo(url, { agent })).videoDetails.title;
-    await textChannel.send(`Playing **${videoTitle}**`);
+    // TODO: extract video title with yt-dlp
+    // const videoTitle = (await ytdl.getInfo(url, { agent })).videoDetails.title;
+    // await textChannel.send(`Playing **${videoTitle}**`);
+    await textChannel.send(`Playing the song`);
 
     player.on("stateChange", async (oldState, newState) => {
       if (newState.status === "idle" && oldState.status !== "idle") {
