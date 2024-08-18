@@ -94,7 +94,7 @@ async function handlePlay(
     // TODO: ideally i don't want to save the file to disk
     // there is probably also a shell escaping vulnerability here somewhere
     console.log(`Downloading: ${url}`);
-    await $`yt-dlp --extract-audio --audio-format opus -o "/tmp/song.%(ext)s" -- "${url}"`;
+    await $`yt-dlp --extract-audio --audio-format opus  --username oauth2 --password unused -o "/tmp/song.%(ext)s" -- "${url}"`;
     const stream = fs.createReadStream("/tmp/song.opus");
     const resource = createAudioResource(stream);
     player.play(resource);

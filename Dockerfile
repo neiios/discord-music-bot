@@ -6,6 +6,8 @@ RUN apt update && \
 
 RUN pip3 install yt-dlp
 
+RUN python3 -m pip install -U https://github.com/coletdjnz/yt-dlp-youtube-oauth2/archive/refs/heads/master.zip
+
 COPY . .
 RUN bun install
 

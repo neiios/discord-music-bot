@@ -2,6 +2,7 @@ services:
   discord-music-bot:
     build: ./.
     volumes:
-      - ./cookies.json:/home/bun/app/cookies.json
+      # stores oauth token
+      - ./cache:/root/.cache
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
