@@ -16,8 +16,13 @@ import {
 
 import fs from "fs";
 
+const agentOptions = {
+  pipelining: 5,
+  maxRedirections: 10,
+};
 const agent = ytdl.createAgent(
   JSON.parse(fs.readFileSync("cookies.json").toString()),
+  agentOptions,
 );
 
 console.log("Starting...");
