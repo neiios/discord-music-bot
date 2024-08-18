@@ -2,6 +2,6 @@ services:
   discord-music-bot:
     build: ./.
     volumes:
-      - ./cookies.json:/cookies.json
+      - ./cookies.json:/home/bun/app/cookies.json
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
