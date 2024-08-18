@@ -14,6 +14,12 @@ import {
   generateDependencyReport,
 } from "@discordjs/voice";
 
+import fs from "fs";
+
+const agent = ytdl.createAgent(
+  JSON.parse(fs.readFileSync("cookies.json").toString()),
+);
+
 console.log("Starting...");
 console.log(generateDependencyReport());
 
@@ -80,7 +86,7 @@ async function handlePlay(
 
   if (player.state.status === "playing") {
     queue.push(url);
-    const videoTitle = (await ytdl.getInfo(url)).videoDetails.title;
+    const videoTitle = (await ytdl.getInfo(url, { agent })).videoDetails.title;
     await textChannel.send(`Queued **${videoTitle}**`);
     return;
   }
@@ -89,12 +95,13 @@ async function handlePlay(
     const stream = ytdl(url, {
       filter: "audioonly",
       highWaterMark: 1 << 25,
+      agent,
     });
 
     const resource = createAudioResource(stream);
     player.play(resource);
 
-    const videoTitle = (await ytdl.getInfo(url)).videoDetails.title;
+    const videoTitle = (await ytdl.getInfo(url, { agent })).videoDetails.title;
     await textChannel.send(`Playing **${videoTitle}**`);
 
     player.on("stateChange", async (oldState, newState) => {
