@@ -19,6 +19,9 @@ import fs from "fs";
 const agentOptions = {
   pipelining: 5,
   maxRedirections: 10,
+  headers: {
+    referer: "https://www.youtube.com/",
+  },
 };
 const agent = ytdl.createAgent(
   JSON.parse(fs.readFileSync("cookies.json").toString()),
