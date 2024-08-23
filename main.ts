@@ -104,14 +104,16 @@ async function handlePlay(
 
   if (player.state.status === "playing") {
     queue.push(url);
-    const videoTitle = await $`yt-dlp --get-title -- "${url}"`.text();
+    const videoTitle =
+      await $`yt-dlp --username oauth2 --password unused --get-title -- "${url}"`.text();
     await textChannel.send(`Queued **${videoTitle}**`);
     return;
   }
 
   try {
     await textChannel.sendTyping();
-    const videoTitle = await $`yt-dlp --get-title -- "${url}"`.text();
+    const videoTitle =
+      await $`yt-dlp --username oauth2 --password unused --get-title -- "${url}"`.text();
 
     // TODO: ideally i don't want to save the file to disk
     // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
