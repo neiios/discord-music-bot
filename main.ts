@@ -78,7 +78,7 @@ client.on("messageCreate", async (message: Message) => {
     }
   } catch (err) {
     if (err instanceof UrlValidationError) {
-      message.channel.send("Send a valid YouTube URL");
+      message.channel.send(err.message);
     } else {
       throw err;
     }
