@@ -83,27 +83,24 @@ async function handlePlay(
 
   if (player.state.status === "playing") {
     queue.push(url);
-    // TODO: extract video title with yt-dlp
-    // const videoTitle = (await ytdl.getInfo(url, { agent })).videoDetails.title;
-    // await textChannel.send(`Queued **${videoTitle}**`);
-    await textChannel.send(`Queued the song`);
+    const videoTitle = await $`yt-dlp --get-title -- "${url}"`.text();
+    await textChannel.send(`Queued **${videoTitle}**`);
     return;
   }
 
   try {
     // TODO: ideally i don't want to save the file to disk
+    // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
     // there is probably also a shell escaping vulnerability here somewhere
     console.log(`Downloading: ${url}`);
-    await $`yt-dlp --extract-audio --audio-format opus  --username oauth2 --password unused -o "/tmp/song.%(ext)s" -- "${url}"`;
+    await $`yt-dlp --extract-audio --audio-format opus --username oauth2 --password unused -o "/tmp/song.%(ext)s" -- "${url}"`;
     const stream = fs.createReadStream("/tmp/song.opus");
     const resource = createAudioResource(stream);
     player.play(resource);
     await $`rm /tmp/song.opus`;
 
-    // TODO: extract video title with yt-dlp
-    // const videoTitle = (await ytdl.getInfo(url, { agent })).videoDetails.title;
-    // await textChannel.send(`Playing **${videoTitle}**`);
-    await textChannel.send(`Playing the song`);
+    const videoTitle = await $`yt-dlp --get-title -- "${url}"`.text();
+    await textChannel.send(`Playing **${videoTitle}**`);
 
     player.on("stateChange", async (oldState, newState) => {
       if (newState.status === "idle" && oldState.status !== "idle") {
