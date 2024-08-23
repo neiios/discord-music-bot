@@ -14,4 +14,3 @@
 - Add a command to skip a song
 - Spotify support
 - Improve dockerfile
-- Stop is broken; music is resumed after you run play again

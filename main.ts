@@ -37,30 +37,51 @@ client.once("ready", () => {
   console.log("Bot is online!");
 });
 
-client.on("messageCreate", async (message: Message) => {
-  if (!message.content.startsWith(PREFIX) || message.author.bot) return;
+class UrlValidationError extends Error {}
 
-  const args = message.content.slice(PREFIX.length).trim().split(/ +/);
-  const command = args.shift()?.toLowerCase();
-
-  if (!message.member?.voice.channel) {
-    return message.channel.send("Join the voice channel first");
+function validYoutubeUrl(maybeUrl: string): string {
+  const youtubeVideoUrlRegex =
+    /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})$/;
+  if (youtubeVideoUrlRegex.test(maybeUrl)) {
+    return maybeUrl;
+  } else {
+    throw new UrlValidationError("Invalid YouTube URL");
   }
+}
 
-  if (command === "play") {
-    const url = args[0];
-    // TODO: add validation
-    // if (!ytdl.validateURL(url)) {
-    //   return message.channel.send("Send a valid YouTube URL");
-    // }
+client.on("messageCreate", async (message: Message) => {
+  try {
+    if (!message.content.startsWith(PREFIX) || message.author.bot) return;
 
-    await handlePlay(
-      message.member.voice.channel,
-      message.channel as GuildTextBasedChannel,
-      url,
-    );
-  } else if (command === "stop") {
-    await handleStop(message);
+    const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+    const command = args.shift()?.toLowerCase();
+
+    if (!message.member?.voice.channel) {
+      return message.channel.send("Join the voice channel first");
+    }
+
+    if (command === "play") {
+      const maybeUrl = args[0];
+      const url = validYoutubeUrl(maybeUrl);
+
+      if (!validYoutubeUrl(maybeUrl)) {
+        return message.channel.send("Send a valid YouTube URL");
+      }
+
+      await handlePlay(
+        message.member.voice.channel,
+        message.channel as GuildTextBasedChannel,
+        url,
+      );
+    } else if (command === "stop") {
+      await handleStop(message);
+    }
+  } catch (err) {
+    if (err instanceof UrlValidationError) {
+      message.channel.send("Send a valid YouTube URL");
+    } else {
+      throw err;
+    }
   }
 });
 
@@ -89,6 +110,9 @@ async function handlePlay(
   }
 
   try {
+    await textChannel.sendTyping();
+    const videoTitle = await $`yt-dlp --get-title -- "${url}"`.text();
+
     // TODO: ideally i don't want to save the file to disk
     // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
     // there is probably also a shell escaping vulnerability here somewhere
@@ -99,7 +123,6 @@ async function handlePlay(
     player.play(resource);
     await $`rm /tmp/song.opus`;
 
-    const videoTitle = await $`yt-dlp --get-title -- "${url}"`.text();
     await textChannel.send(`Playing **${videoTitle}**`);
 
     player.on("stateChange", async (oldState, newState) => {
@@ -126,6 +149,8 @@ async function handleStop(message: Message) {
   if (!voiceChannel) {
     return message.channel.send("Join the voice channel first");
   }
+
+  player.stop();
 
   const connection = getVoiceConnection(voiceChannel.guild.id);
   if (connection) connection.destroy();
