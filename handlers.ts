@@ -2,6 +2,7 @@ import { createAudioResource } from "@discordjs/voice";
 import { $ } from "bun";
 import { PLAYER, QUEUE, MUSIC_CHANNEL, VOICE_CONNECTION } from "./main";
 import { Readable } from "stream";
+import { AudioResource } from "@discordjs/voice";
 
 let LOCKED = false;
 
@@ -44,29 +45,42 @@ async function toURL(maybeUrl: string): Promise<string> {
   }
 }
 
-export async function handlePlay(maybeUrl: string) {
-  MUSIC_CHANNEL.sendTyping();
-  const url = await toURL(maybeUrl);
-
-  if (PLAYER.state.status === "playing" || LOCKED) {
-    const title = await getVideoTitle(url);
-    QUEUE.push({ title, url });
-    MUSIC_CHANNEL.send(`queued **${title}**`);
-    return;
-  }
-
-  LOCKED = true;
-  const title = getVideoTitle(url);
-
+export async function createResource(url: string) {
   // TODO: there is probably a race condtion with stop here
   // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
   console.log(`downloading: ${url}`);
   const blob = await downloadAudio(url);
   const stream = blob.stream();
-  const resource = createAudioResource(Readable.from(stream));
-  PLAYER.play(resource);
+  return createAudioResource(Readable.from(stream));
+}
 
-  await MUSIC_CHANNEL.send(`playing **${await title}**`);
+export async function handlePlay(
+  maybeUrl: string,
+  audio?: AudioResource,
+  title?: string,
+) {
+  MUSIC_CHANNEL.sendTyping();
+  const url = await toURL(maybeUrl);
+
+  if (PLAYER.state.status === "playing" || LOCKED) {
+    const resource = await createResource(url);
+    const title = await getVideoTitle(url);
+    MUSIC_CHANNEL.send(`queued **${title}**`);
+    QUEUE.push({ title, url, audio: resource });
+    return;
+  }
+
+  LOCKED = true;
+  if (audio) {
+    PLAYER.play(audio);
+    await MUSIC_CHANNEL.send(`playing **${title}**`);
+  } else {
+    const title = await getVideoTitle(url);
+    const resource = await createResource(url);
+    PLAYER.play(resource);
+    await MUSIC_CHANNEL.send(`playing **${title}**`);
+  }
+
   LOCKED = false;
 }
 

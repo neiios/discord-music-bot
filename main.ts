@@ -10,6 +10,7 @@ import {
   joinVoiceChannel,
   generateDependencyReport,
   VoiceConnection,
+  AudioResource,
 } from "@discordjs/voice";
 import {
   handlePlay,
@@ -21,6 +22,7 @@ import {
 type Song = {
   title: string;
   url: string;
+  audio?: AudioResource;
 };
 
 export const PREFIX = "/";
@@ -91,7 +93,7 @@ PLAYER.on("stateChange", async (oldState, newState) => {
       return;
     }
 
-    await handlePlay(nextUrl.url);
+    await handlePlay(nextUrl.url, nextUrl.audio, nextUrl.title);
   }
 });
 
