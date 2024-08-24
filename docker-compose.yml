@@ -3,4 +3,4 @@ services:
     build: ./.
     volumes:
       - ./cache:/root/.cache # stores oauth token
-      - ./.env:/home/bun/.env
+      - ./.env:/home/bun/app/.env
