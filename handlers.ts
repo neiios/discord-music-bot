@@ -43,14 +43,14 @@ export async function handlePlay(maybeUrl: string) {
   const url = await toURL(maybeUrl);
 
   if (PLAYER.state.status === "playing" || LOCKED) {
-    QUEUE.push(url);
-    const videoTitle = await getVideoTitle(url);
-    MUSIC_CHANNEL.send(`queued **${videoTitle}**`);
+    const title = await getVideoTitle(url);
+    QUEUE.push({ title: title, url });
+    MUSIC_CHANNEL.send(`queued **${title}**`);
     return;
   }
 
   LOCKED = true;
-  const videoTitle = getVideoTitle(url);
+  const title = getVideoTitle(url);
 
   // TODO: there is probably a race condtion with stop here
   // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
@@ -60,7 +60,7 @@ export async function handlePlay(maybeUrl: string) {
   const resource = createAudioResource(Readable.from(stream));
   PLAYER.play(resource);
 
-  await MUSIC_CHANNEL.send(`playing **${await videoTitle}**`);
+  await MUSIC_CHANNEL.send(`playing **${await title}**`);
   LOCKED = false;
 }
 
@@ -87,4 +87,17 @@ export async function handleDisconnect() {
   VOICE_CONNECTION.destroy();
   QUEUE.length = 0;
   await MUSIC_CHANNEL.send("have a good time, fren");
+}
+
+export async function handleList() {
+  if (QUEUE.length === 0) {
+    await MUSIC_CHANNEL.send("queue is empty");
+    return;
+  }
+
+  const titles = QUEUE.map(
+    (song, index) => `${index + 1}. **${song.title.trim()}**`,
+  );
+  const message = `queue:\n${titles.join("\n")}`;
+  await MUSIC_CHANNEL.send(message);
 }

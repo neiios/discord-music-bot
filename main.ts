@@ -11,10 +11,20 @@ import {
   generateDependencyReport,
   VoiceConnection,
 } from "@discordjs/voice";
-import { handlePlay, handleSkip, handleDisconnect } from "./handlers";
+import {
+  handlePlay,
+  handleSkip,
+  handleList,
+  handleDisconnect,
+} from "./handlers";
+
+type Song = {
+  title: string;
+  url: URL;
+};
 
 export const PREFIX = "/";
-export const QUEUE: URL[] = [];
+export const QUEUE: Song[] = [];
 export const PLAYER = createAudioPlayer();
 export const CLIENT = new Client({
   intents: [
@@ -63,6 +73,8 @@ CLIENT.on("messageCreate", async (message: Message) => {
       await handlePlay(args[0]);
     } else if (command === "skip") {
       await handleSkip();
+    } else if (command === "list") {
+      await handleList();
     } else if (command === "disconnect") {
       await handleDisconnect();
     } else {
