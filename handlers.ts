@@ -1,6 +1,6 @@
 import { createAudioResource } from "@discordjs/voice";
 import { $ } from "bun";
-import { PLAYER, QUEUE, TEXT_CHANNEL, VOICE_CONNECTION } from "./main";
+import { PLAYER, QUEUE, MUSIC_CHANNEL, VOICE_CONNECTION } from "./main";
 import { Readable } from "stream";
 
 let LOCKED = false;
@@ -33,19 +33,19 @@ async function toURL(maybeUrl: string) {
   try {
     return new URL(maybeUrl);
   } catch {
-    TEXT_CHANNEL.send("invalid url");
+    MUSIC_CHANNEL.send("invalid url");
     throw new Error("invalid url");
   }
 }
 
 export async function handlePlay(maybeUrl: string) {
-  TEXT_CHANNEL.sendTyping();
+  MUSIC_CHANNEL.sendTyping();
   const url = await toURL(maybeUrl);
 
   if (PLAYER.state.status === "playing" || LOCKED) {
     QUEUE.push(url);
     const videoTitle = await getVideoTitle(url);
-    TEXT_CHANNEL.send(`queued **${videoTitle}**`);
+    MUSIC_CHANNEL.send(`queued **${videoTitle}**`);
     return;
   }
 
@@ -60,7 +60,7 @@ export async function handlePlay(maybeUrl: string) {
   const resource = createAudioResource(Readable.from(stream));
   PLAYER.play(resource);
 
-  await TEXT_CHANNEL.send(`playing **${await videoTitle}**`);
+  await MUSIC_CHANNEL.send(`playing **${await videoTitle}**`);
   LOCKED = false;
 }
 
@@ -75,7 +75,7 @@ export async function handleSkip() {
   }
 
   PLAYER.stop();
-  await TEXT_CHANNEL.send("skipped");
+  await MUSIC_CHANNEL.send("skipped");
 
   await handlePlay(nextUrl.toString());
 }
@@ -86,5 +86,5 @@ export async function handleDisconnect() {
   PLAYER.stop();
   VOICE_CONNECTION.destroy();
   QUEUE.length = 0;
-  await TEXT_CHANNEL.send("have a good time, fren");
+  await MUSIC_CHANNEL.send("have a good time, fren");
 }

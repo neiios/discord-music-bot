@@ -49,7 +49,7 @@ function isInvalidMessage(message: Message) {
   return (
     !message.content.startsWith(PREFIX) ||
     message.author.bot ||
-    message.channelId != TEXT_CHANNEL.id
+    message.channelId != MUSIC_CHANNEL.id
   );
 }
 
@@ -93,6 +93,6 @@ console.log(generateDependencyReport());
 await CLIENT.login(process.env.DISCORD_TOKEN);
 
 export let VOICE_CONNECTION: VoiceConnection | undefined;
-export const TEXT_CHANNEL = (await CLIENT.channels.fetch(
-  process.env.TEXT_CHANNEL_ID!,
+export const MUSIC_CHANNEL = (await CLIENT.channels.fetch(
+  process.env.MUSIC_CHANNEL_ID!,
 )) as GuildTextBasedChannel;
