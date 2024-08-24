@@ -2,29 +2,21 @@ import {
   Client,
   GatewayIntentBits,
   GuildTextBasedChannel,
-  Message,
   VoiceBasedChannel,
+  Message,
 } from "discord.js";
 import {
-  joinVoiceChannel,
   createAudioPlayer,
-  createAudioResource,
-  getVoiceConnection,
+  joinVoiceChannel,
   generateDependencyReport,
+  VoiceConnection,
 } from "@discordjs/voice";
+import { handlePlay, handleSkip, handleDisconnect } from "./handlers";
 
-import fs from "fs";
-import { $ } from "bun";
-
-console.log("Starting...");
-console.log(generateDependencyReport());
-
-const PREFIX = "/";
-const queue: string[] = [];
-
-const player = createAudioPlayer();
-
-const client = new Client({
+export const PREFIX = "/";
+export const QUEUE: URL[] = [];
+export const PLAYER = createAudioPlayer();
+export const CLIENT = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
@@ -33,131 +25,74 @@ const client = new Client({
   ],
 });
 
-client.once("ready", () => {
-  console.log("Bot is online!");
-});
+function joinVoiceChannelIfNecessary(channel?: VoiceBasedChannel | null) {
+  if (VOICE_CONNECTION) return;
+  if (!channel) throw new Error("join voice channel");
 
-class UrlValidationError extends Error {}
+  VOICE_CONNECTION = joinVoiceChannel({
+    channelId: channel.id,
+    guildId: channel.guild.id,
+    adapterCreator: channel.guild.voiceAdapterCreator,
+    selfDeaf: false,
+  });
 
-function validYoutubeUrl(maybeUrl: string): string {
-  const youtubeVideoUrlRegex =
-    /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})$/;
-  if (youtubeVideoUrlRegex.test(maybeUrl)) {
-    return maybeUrl;
-  } else {
-    throw new UrlValidationError("Invalid YouTube URL");
-  }
+  VOICE_CONNECTION.subscribe(PLAYER);
 }
 
-client.on("messageCreate", async (message: Message) => {
+function parseCommand(message: Message) {
+  const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+  const command = args.shift()?.toLowerCase();
+  return { args, command };
+}
+
+function isInvalidMessage(message: Message) {
+  return (
+    !message.content.startsWith(PREFIX) ||
+    message.author.bot ||
+    message.channelId != TEXT_CHANNEL.id
+  );
+}
+
+CLIENT.on("messageCreate", async (message: Message) => {
   try {
-    if (!message.content.startsWith(PREFIX) || message.author.bot) return;
-
-    const args = message.content.slice(PREFIX.length).trim().split(/ +/);
-    const command = args.shift()?.toLowerCase();
-
-    if (!message.member?.voice.channel) {
-      return message.channel.send("Join the voice channel first");
-    }
+    if (isInvalidMessage(message)) return;
+    const { command, args } = parseCommand(message);
+    joinVoiceChannelIfNecessary(message.member?.voice.channel);
 
     if (command === "play") {
-      const maybeUrl = args[0];
-      const url = maybeUrl;
-      // const url = validYoutubeUrl(maybeUrl);
-
-      // if (!validYoutubeUrl(maybeUrl)) {
-      //   return message.channel.send("Send a valid YouTube URL");
-      // }
-
-      await handlePlay(
-        message.member.voice.channel,
-        message.channel as GuildTextBasedChannel,
-        url,
-      );
-    } else if (command === "stop") {
-      await handleStop(message);
+      await handlePlay(args[0]);
+    } else if (command === "skip") {
+      await handleSkip();
+    } else if (command === "disconnect") {
+      await handleDisconnect();
+    } else {
+      message.channel.send("invalid command");
     }
   } catch (err) {
-    if (err instanceof UrlValidationError) {
-      message.channel.send(err.message);
-    } else {
-      throw err;
-    }
+    console.log(err);
+    message.channel.send("error handling command");
   }
 });
 
-async function handlePlay(
-  voiceChannel: VoiceBasedChannel,
-  textChannel: GuildTextBasedChannel,
-  url: string,
-) {
-  let connection = getVoiceConnection(voiceChannel.guild.id);
-  if (!connection) {
-    connection = joinVoiceChannel({
-      channelId: voiceChannel.id,
-      guildId: voiceChannel.guild.id,
-      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-      selfDeaf: false,
-    });
+PLAYER.on("stateChange", async (oldState, newState) => {
+  if (newState.status === "idle" && oldState.status !== "idle") {
+    const nextUrl = QUEUE.shift();
+    if (!nextUrl) {
+      return;
+    }
 
-    connection.subscribe(player);
+    await handlePlay(nextUrl.toString());
   }
+});
 
-  if (player.state.status === "playing") {
-    queue.push(url);
-    const videoTitle =
-      await $`yt-dlp --username oauth2 --password unused --get-title -- "${url}"`.text();
-    await textChannel.send(`Queued **${videoTitle}**`);
-    return;
-  }
+CLIENT.once("ready", () => {
+  console.log("ready to jam");
+});
 
-  try {
-    await textChannel.sendTyping();
-    const videoTitle =
-      await $`yt-dlp --username oauth2 --password unused --get-title -- "${url}"`.text();
+console.log(generateDependencyReport());
+await CLIENT.login(process.env.DISCORD_TOKEN);
 
-    // TODO: ideally i don't want to save the file to disk
-    // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
-    // there is probably also a shell escaping vulnerability here somewhere
-    console.log(`Downloading: ${url}`);
-    await $`yt-dlp --extract-audio --audio-format opus --username oauth2 --password unused -o "/tmp/song.%(ext)s" -- "${url}"`;
-    const stream = fs.createReadStream("/tmp/song.opus");
-    const resource = createAudioResource(stream);
-    player.play(resource);
-    await $`rm /tmp/song.opus`;
-
-    await textChannel.send(`Playing **${videoTitle}**`);
-
-    player.on("stateChange", async (oldState, newState) => {
-      if (newState.status === "idle" && oldState.status !== "idle") {
-        const nextUrl = queue.shift();
-        if (nextUrl) {
-          await handlePlay(voiceChannel, textChannel, nextUrl);
-        }
-      }
-    });
-
-    player.on("error", (err) => {
-      console.error("Error in player: ", err);
-      textChannel.send("An error occurred while playing the audio");
-    });
-  } catch (err) {
-    console.error("Error playing audio: ", err);
-    textChannel.send("An error occurred while trying to play the audio");
-  }
-}
-
-async function handleStop(message: Message) {
-  const voiceChannel = message.member?.voice.channel;
-  if (!voiceChannel) {
-    return message.channel.send("Join the voice channel first");
-  }
-
-  player.stop();
-
-  const connection = getVoiceConnection(voiceChannel.guild.id);
-  if (connection) connection.destroy();
-  await message.channel.send("Have a good time, fren");
-}
-
-client.login(process.env.DISCORD_TOKEN);
+export let VOICE_CONNECTION: VoiceConnection | undefined;
+export const TEXT_CHANNEL = (await CLIENT.channels.fetch(
+  process.env.TEXT_CHANNEL_ID!,
+)) as GuildTextBasedChannel;
