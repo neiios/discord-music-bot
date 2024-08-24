@@ -20,7 +20,7 @@ import {
 
 type Song = {
   title: string;
-  url: URL;
+  url: string;
 };
 
 export const PREFIX = "/";
@@ -91,7 +91,7 @@ PLAYER.on("stateChange", async (oldState, newState) => {
       return;
     }
 
-    await handlePlay(nextUrl.url.href);
+    await handlePlay(nextUrl.url);
   }
 });
 

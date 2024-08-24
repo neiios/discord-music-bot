@@ -5,15 +5,20 @@ import { Readable } from "stream";
 
 let LOCKED = false;
 
-function isYoutubeUrl(url: URL): boolean {
-  return (
-    url.hostname === "www.youtube.com" ||
-    url.hostname === "youtube.com" ||
-    url.hostname === "youtu.be"
-  );
+function isYoutubeUrl(url: string): boolean {
+  try {
+    const parsedUrl = new URL(url);
+    return (
+      parsedUrl.hostname === "www.youtube.com" ||
+      parsedUrl.hostname === "youtube.com" ||
+      parsedUrl.hostname === "youtu.be"
+    );
+  } catch (e) {
+    return false;
+  }
 }
 
-async function getVideoTitle(url: URL) {
+async function getVideoTitle(url: string): Promise<string> {
   if (isYoutubeUrl(url)) {
     return $`yt-dlp --username oauth2 --password unused --get-title -- "${url}"`.text();
   } else {
@@ -21,17 +26,18 @@ async function getVideoTitle(url: URL) {
   }
 }
 
-async function downloadAudio(url: URL) {
+async function downloadAudio(url: string) {
   if (isYoutubeUrl(url)) {
-    return $`yt-dlp --username oauth2 --password unused --extract-audio --audio-format opus -o - -- "${url}"`.blob();
+    return await $`yt-dlp --username oauth2 --password unused --extract-audio --audio-format opus -o - -- "${url}"`.blob();
   } else {
-    return $`yt-dlp --extract-audio --audio-format opus -o - -- "${url}"`.blob();
+    return await $`yt-dlp --extract-audio --audio-format opus -o - -- "${url}"`.blob();
   }
 }
 
-async function toURL(maybeUrl: string) {
+async function toURL(maybeUrl: string): Promise<string> {
   try {
-    return new URL(maybeUrl);
+    new URL(maybeUrl);
+    return maybeUrl;
   } catch {
     MUSIC_CHANNEL.send("invalid url");
     throw new Error("invalid url");
@@ -44,7 +50,7 @@ export async function handlePlay(maybeUrl: string) {
 
   if (PLAYER.state.status === "playing" || LOCKED) {
     const title = await getVideoTitle(url);
-    QUEUE.push({ title: title, url });
+    QUEUE.push({ title, url });
     MUSIC_CHANNEL.send(`queued **${title}**`);
     return;
   }
@@ -77,7 +83,7 @@ export async function handleSkip() {
     return;
   }
 
-  await handlePlay(nextUrl.url.href);
+  await handlePlay(nextUrl.url);
 }
 
 export async function handleDisconnect() {
