@@ -69,13 +69,13 @@ export async function handleSkip() {
     return;
   }
 
+  PLAYER.stop();
+  await MUSIC_CHANNEL.send("skipped");
+
   const nextUrl = QUEUE.shift();
   if (!nextUrl) {
     return;
   }
-
-  PLAYER.stop();
-  await MUSIC_CHANNEL.send("skipped");
 
   await handlePlay(nextUrl.url.href);
 }
