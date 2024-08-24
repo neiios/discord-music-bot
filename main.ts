@@ -62,11 +62,12 @@ client.on("messageCreate", async (message: Message) => {
 
     if (command === "play") {
       const maybeUrl = args[0];
-      const url = validYoutubeUrl(maybeUrl);
+      const url = maybeUrl;
+      // const url = validYoutubeUrl(maybeUrl);
 
-      if (!validYoutubeUrl(maybeUrl)) {
-        return message.channel.send("Send a valid YouTube URL");
-      }
+      // if (!validYoutubeUrl(maybeUrl)) {
+      //   return message.channel.send("Send a valid YouTube URL");
+      // }
 
       await handlePlay(
         message.member.voice.channel,
