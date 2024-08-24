@@ -77,7 +77,7 @@ export async function handleSkip() {
   PLAYER.stop();
   await MUSIC_CHANNEL.send("skipped");
 
-  await handlePlay(nextUrl.toString());
+  await handlePlay(nextUrl.url.href);
 }
 
 export async function handleDisconnect() {

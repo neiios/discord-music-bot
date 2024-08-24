@@ -91,7 +91,7 @@ PLAYER.on("stateChange", async (oldState, newState) => {
       return;
     }
 
-    await handlePlay(nextUrl.toString());
+    await handlePlay(nextUrl.url.href);
   }
 });
 
