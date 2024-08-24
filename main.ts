@@ -77,8 +77,6 @@ CLIENT.on("messageCreate", async (message: Message) => {
       await handleList();
     } else if (command === "disconnect") {
       await handleDisconnect();
-    } else {
-      message.channel.send("invalid command");
     }
   } catch (err) {
     console.log(err);

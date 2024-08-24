@@ -12,3 +12,4 @@
 - Spotify support
 - Docker container doesn't handle SIGINT properly
 - Make commands visible in the picker
+- Use recommended (faster) deps for discord.js
