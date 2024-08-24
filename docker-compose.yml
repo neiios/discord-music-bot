@@ -4,3 +4,4 @@ services:
     volumes:
       - ./cache:/root/.cache # stores oauth token
       - ./.env:/home/bun/app/.env
+    restart: always
