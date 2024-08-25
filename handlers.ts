@@ -1,8 +1,8 @@
 import { createAudioResource } from "@discordjs/voice";
 import { $ } from "bun";
 import { PLAYER, QUEUE, MUSIC_CHANNEL, VOICE_CONNECTION } from "./main";
-import { Readable } from "stream";
 import { AudioResource } from "@discordjs/voice";
+import fs from "fs";
 
 let LOCKED = false;
 
@@ -28,11 +28,16 @@ async function getVideoTitle(url: string): Promise<string> {
 }
 
 async function downloadAudio(url: string) {
+  // NOTE: format conversion doesn't work when passing stdout directly to blob
   if (isYoutubeUrl(url)) {
-    return await $`yt-dlp --username oauth2 --password unused --extract-audio --audio-format opus -o - -- "${url}"`.blob();
+    await $`yt-dlp --username oauth2 --password unused --extract-audio --audio-format opus -o /tmp/audio.opus -- "${url}"`;
   } else {
-    return await $`yt-dlp --extract-audio --audio-format opus -o - -- "${url}"`.blob();
+    await $`yt-dlp --extract-audio --audio-format opus -o /tmp/audio.opus -- "${url}"`;
   }
+
+  const stream = fs.createReadStream("/tmp/audio.opus");
+  fs.rmSync("/tmp/audio.opus");
+  return createAudioResource(stream);
 }
 
 async function toURL(maybeUrl: string): Promise<string> {
@@ -45,28 +50,20 @@ async function toURL(maybeUrl: string): Promise<string> {
   }
 }
 
-export async function createResource(url: string) {
-  // TODO: there is probably a race condtion with stop here
-  // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
-  console.log(`downloading: ${url}`);
-  const blob = await downloadAudio(url);
-  const stream = blob.stream();
-  return createAudioResource(Readable.from(stream));
-}
-
 export async function handlePlay(
   maybeUrl: string,
   audio?: AudioResource,
   title?: string,
 ) {
+  // TODO: there is probably a race condtion with stop and skip here
   MUSIC_CHANNEL.sendTyping();
   const url = await toURL(maybeUrl);
 
   if (PLAYER.state.status === "playing" || LOCKED) {
-    const resource = await createResource(url);
+    const audio = await downloadAudio(url);
     const title = await getVideoTitle(url);
     MUSIC_CHANNEL.send(`queued **${title}**`);
-    QUEUE.push({ title, url, audio: resource });
+    QUEUE.push({ title, url, audio });
     return;
   }
 
@@ -76,8 +73,10 @@ export async function handlePlay(
     await MUSIC_CHANNEL.send(`playing **${title}**`);
   } else {
     const title = await getVideoTitle(url);
-    const resource = await createResource(url);
-    PLAYER.play(resource);
+    // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
+    // and sometimes yt-dlp is being dumb and downloads the whole video to extract the audio part
+    const audio = await downloadAudio(url);
+    PLAYER.play(audio);
     await MUSIC_CHANNEL.send(`playing **${title}**`);
   }
 
