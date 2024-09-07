@@ -1,8 +1,15 @@
 import { createAudioResource } from "@discordjs/voice";
 import { $ } from "bun";
-import { PLAYER, QUEUE, MUSIC_CHANNEL, VOICE_CONNECTION } from "./main";
-import { demuxProbe, AudioResource } from "@discordjs/voice";
-import { Readable } from "node:stream";
+import {
+  PLAYER,
+  QUEUE,
+  MUSIC_CHANNEL,
+  VOICE_CONNECTION,
+  BotError,
+} from "./main";
+import { AudioResource } from "@discordjs/voice";
+import fs from "node:fs";
+import crypto from "node:crypto";
 
 let LOCKED = false;
 
@@ -27,24 +34,22 @@ async function getVideoTitle(url: string): Promise<string> {
   }
 }
 
-async function probeAndCreateResource(readable: Readable) {
-  const { stream, type } = await demuxProbe(readable);
-  return createAudioResource(stream, { inputType: type });
-}
-
 async function downloadAudio(url: string): Promise<AudioResource> {
-  // NOTE: format conversion doesn't work when passing stdout directly to blob
-  async function download(url: string): Promise<Blob> {
-    if (isYoutubeUrl(url)) {
-      return $`yt-dlp --username oauth2 --password unused --extractor-args youtube:player-client=default,mweb --extract-audio -o - -- "${url}"`.blob();
-    } else {
-      return $`yt-dlp --extract-audio -o - -- "${url}"`.blob();
-    }
+  const urlHash = crypto.createHash("sha256").update(url).digest("hex");
+  if (isYoutubeUrl(url)) {
+    await $`yt-dlp --username oauth2 --password unused --extractor-args youtube:player-client=default,mweb --extract-audio -o "/tmp/${urlHash}.%(ext)s" -- "${url}"`;
+  } else {
+    await $`yt-dlp --extract-audio -o /tmp/${urlHash} -- "${url}"`;
   }
 
-  const blob = await download(url);
-  const stream = blob.stream();
-  return probeAndCreateResource(Readable.from(stream));
+  const filename = (await $`ls /tmp/${urlHash}.*`.text()).trim();
+  if (!filename) {
+    throw new BotError("no file downloaded, oops");
+  }
+
+  const stream = fs.createReadStream(filename);
+  await $`rm ${filename}*`;
+  return createAudioResource(stream);
 }
 
 async function toURL(maybeUrl: string): Promise<string> {
@@ -72,9 +77,9 @@ export async function handlePlay(
   const url = await toURL(maybeUrl);
 
   if (PLAYER.state.status === "playing" || LOCKED) {
-    const [audio, title] = await Promise.all([
-      downloadAudio(url),
+    const [title, audio] = await Promise.all([
       getVideoTitle(url),
+      downloadAudio(url),
     ]);
 
     MUSIC_CHANNEL.send(`queued **${title}**`);
@@ -88,13 +93,14 @@ export async function handlePlay(
     await MUSIC_CHANNEL.send(`playing **${title}**`);
   } else {
     // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
-    // and sometimes yt-dlp is being dumb and downloads the whole video to extract the audio part
-    const [audio, title] = await Promise.all([
-      downloadAudio(url),
+    // and also sometimes yt-dlp downloads the whole video just to extract the audio part
+    const [title, audio] = await Promise.all([
       getVideoTitle(url),
+      downloadAudio(url),
     ]);
 
     PLAYER.play(audio);
+    console.log("playing", title, url);
     await MUSIC_CHANNEL.send(`playing **${title}**`);
   }
 
