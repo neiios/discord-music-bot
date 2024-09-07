@@ -1,6 +1,7 @@
 services:
   discord-music-bot:
     build: ./.
+    init: true
     volumes:
       - ./cache:/root/.cache # stores oauth token
       - ./.env:/home/bun/app/.env

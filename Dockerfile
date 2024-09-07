@@ -11,4 +11,4 @@ RUN python3 -m pip install -U https://github.com/coletdjnz/yt-dlp-youtube-oauth2
 COPY . .
 RUN bun install
 
-ENTRYPOINT ["bun", "run", "main.ts"]
+CMD ["bun", "run", "main.ts"]
