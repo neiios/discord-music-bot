@@ -36,7 +36,7 @@ async function downloadAudio(url: string): Promise<AudioResource> {
   // NOTE: format conversion doesn't work when passing stdout directly to blob
   async function download(url: string): Promise<Blob> {
     if (isYoutubeUrl(url)) {
-      return $`yt-dlp --username oauth2 --password unused --extract-audio -o - -- "${url}"`.blob();
+      return $`yt-dlp --username oauth2 --password unused --extractor-args youtube:player-client=default,mweb --extract-audio -o - -- "${url}"`.blob();
     } else {
       return $`yt-dlp --extract-audio -o - -- "${url}"`.blob();
     }
