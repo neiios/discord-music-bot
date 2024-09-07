@@ -1,8 +1,8 @@
 import { createAudioResource } from "@discordjs/voice";
 import { $ } from "bun";
 import { PLAYER, QUEUE, MUSIC_CHANNEL, VOICE_CONNECTION } from "./main";
-import { AudioResource } from "@discordjs/voice";
-import fs from "fs";
+import { demuxProbe, AudioResource } from "@discordjs/voice";
+import { Readable } from "node:stream";
 
 let LOCKED = false;
 
@@ -27,17 +27,24 @@ async function getVideoTitle(url: string): Promise<string> {
   }
 }
 
-async function downloadAudio(url: string) {
+async function probeAndCreateResource(readable: Readable) {
+  const { stream, type } = await demuxProbe(readable);
+  return createAudioResource(stream, { inputType: type });
+}
+
+async function downloadAudio(url: string): Promise<AudioResource> {
   // NOTE: format conversion doesn't work when passing stdout directly to blob
-  if (isYoutubeUrl(url)) {
-    await $`yt-dlp --username oauth2 --password unused --extract-audio --audio-format opus -o /tmp/audio.opus -- "${url}"`;
-  } else {
-    await $`yt-dlp --extract-audio --audio-format opus -o /tmp/audio.opus -- "${url}"`;
+  async function download(url: string): Promise<Blob> {
+    if (isYoutubeUrl(url)) {
+      return $`yt-dlp --username oauth2 --password unused --extract-audio -o - -- "${url}"`.blob();
+    } else {
+      return $`yt-dlp --extract-audio -o - -- "${url}"`.blob();
+    }
   }
 
-  const stream = fs.createReadStream("/tmp/audio.opus");
-  fs.rmSync("/tmp/audio.opus");
-  return createAudioResource(stream);
+  const blob = await download(url);
+  const stream = blob.stream();
+  return probeAndCreateResource(Readable.from(stream));
 }
 
 async function toURL(maybeUrl: string): Promise<string> {
@@ -51,17 +58,25 @@ async function toURL(maybeUrl: string): Promise<string> {
 }
 
 export async function handlePlay(
-  maybeUrl: string,
+  maybeUrl?: string,
   audio?: AudioResource,
   title?: string,
 ) {
+  if (!maybeUrl) {
+    await MUSIC_CHANNEL.send("provide a url");
+    return;
+  }
+
   // TODO: there is probably a race condtion with stop and skip here
   MUSIC_CHANNEL.sendTyping();
   const url = await toURL(maybeUrl);
 
   if (PLAYER.state.status === "playing" || LOCKED) {
-    const audio = await downloadAudio(url);
-    const title = await getVideoTitle(url);
+    const [audio, title] = await Promise.all([
+      downloadAudio(url),
+      getVideoTitle(url),
+    ]);
+
     MUSIC_CHANNEL.send(`queued **${title}**`);
     QUEUE.push({ title, url, audio });
     return;
@@ -72,10 +87,13 @@ export async function handlePlay(
     PLAYER.play(audio);
     await MUSIC_CHANNEL.send(`playing **${title}**`);
   } else {
-    const title = await getVideoTitle(url);
     // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
     // and sometimes yt-dlp is being dumb and downloads the whole video to extract the audio part
-    const audio = await downloadAudio(url);
+    const [audio, title] = await Promise.all([
+      downloadAudio(url),
+      getVideoTitle(url),
+    ]);
+
     PLAYER.play(audio);
     await MUSIC_CHANNEL.send(`playing **${title}**`);
   }

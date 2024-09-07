@@ -1,8 +1,8 @@
 import {
   Client,
   GatewayIntentBits,
-  GuildTextBasedChannel,
-  VoiceBasedChannel,
+  type GuildTextBasedChannel,
+  type VoiceBasedChannel,
   Message,
 } from "discord.js";
 import {
@@ -12,18 +12,7 @@ import {
   VoiceConnection,
   AudioResource,
 } from "@discordjs/voice";
-import {
-  handlePlay,
-  handleSkip,
-  handleList,
-  handleDisconnect,
-} from "./handlers";
-
-type Song = {
-  title: string;
-  url: string;
-  audio?: AudioResource;
-};
+import { handlePlay, handleSkip, handleList } from "./handlers";
 
 export const PREFIX = "/";
 export const QUEUE: Song[] = [];
@@ -37,52 +26,22 @@ export const CLIENT = new Client({
   ],
 });
 
-function joinVoiceChannelIfNecessary(channel?: VoiceBasedChannel | null) {
-  if (VOICE_CONNECTION) return;
-  if (!channel) throw new Error("join voice channel");
-
-  VOICE_CONNECTION = joinVoiceChannel({
-    channelId: channel.id,
-    guildId: channel.guild.id,
-    adapterCreator: channel.guild.voiceAdapterCreator,
-    selfDeaf: false,
-  });
-
-  VOICE_CONNECTION.subscribe(PLAYER);
-}
-
-function parseCommand(message: Message) {
-  const args = message.content.slice(PREFIX.length).trim().split(/ +/);
-  const command = args.shift()?.toLowerCase();
-  return { args, command };
-}
-
-function isInvalidMessage(message: Message) {
-  return (
-    !message.content.startsWith(PREFIX) ||
-    message.author.bot ||
-    message.channelId != MUSIC_CHANNEL.id
-  );
-}
-
 CLIENT.on("messageCreate", async (message: Message) => {
   try {
     if (isInvalidMessage(message)) return;
     const { command, args } = parseCommand(message);
     joinVoiceChannelIfNecessary(message.member?.voice.channel);
 
-    if (command === "play") {
-      await handlePlay(args[0]);
-    } else if (command === "skip") {
-      await handleSkip();
-    } else if (command === "list") {
-      await handleList();
-    } else if (command === "disconnect") {
-      await handleDisconnect();
-    }
+    if (command === "play") await handlePlay(args[0]);
+    else if (command === "skip") await handleSkip();
+    else if (command === "list" || command === "queue") await handleList();
+    else if (command === "disconnect" || command === "stop") await handleSkip();
+    else await message.channel.send("invalid command");
   } catch (err) {
-    console.log(err);
-    message.channel.send("error handling command");
+    if (err instanceof BotError) {
+      console.log(err);
+      message.channel.send(err.message);
+    }
   }
 });
 
@@ -108,3 +67,44 @@ export let VOICE_CONNECTION: VoiceConnection | undefined;
 export const MUSIC_CHANNEL = (await CLIENT.channels.fetch(
   process.env.MUSIC_CHANNEL_ID!,
 )) as GuildTextBasedChannel;
+
+type Song = {
+  title: string;
+  url: string;
+  audio?: AudioResource;
+};
+
+export const BotError = class extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BotError";
+  }
+};
+
+function joinVoiceChannelIfNecessary(channel?: VoiceBasedChannel | null) {
+  if (VOICE_CONNECTION) return;
+  if (!channel) throw new BotError("join voice channel first");
+
+  VOICE_CONNECTION = joinVoiceChannel({
+    channelId: channel.id,
+    guildId: channel.guild.id,
+    adapterCreator: channel.guild.voiceAdapterCreator,
+    selfDeaf: false,
+  });
+
+  VOICE_CONNECTION.subscribe(PLAYER);
+}
+
+function parseCommand(message: Message) {
+  const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+  const command = args.shift()?.toLowerCase();
+  return { args, command };
+}
+
+function isInvalidMessage(message: Message) {
+  return (
+    !message.content.startsWith(PREFIX) ||
+    message.author.bot ||
+    message.channelId != MUSIC_CHANNEL.id
+  );
+}

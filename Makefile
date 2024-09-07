@@ -1,3 +1,3 @@
 redeploy:
 	git pull
-	docker compose up --build --force-recreate -d
+	podman compose up --build --force-recreate -d
