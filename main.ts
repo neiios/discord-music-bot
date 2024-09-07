@@ -29,6 +29,8 @@ export const CLIENT = new Client({
 CLIENT.on("messageCreate", async (message: Message) => {
   try {
     if (isInvalidMessage(message)) return;
+    console.log(message.content);
+
     const { command, args } = parseCommand(message);
     joinVoiceChannelIfNecessary(message.member?.voice.channel);
 
