@@ -72,39 +72,40 @@ export async function handlePlay(
     return;
   }
 
-  // TODO: there is probably a race condtion with stop and skip here
+  // TODO: there is probably a race condition with stop and skip here
   MUSIC_CHANNEL.sendTyping();
   const url = await toURL(maybeUrl);
 
   if (PLAYER.state.status === "playing" || LOCKED) {
-    const [title, audio] = await Promise.all([
+    const [videoTitle, downloadedAudio] = await Promise.all([
       getVideoTitle(url),
       downloadAudio(url),
     ]);
 
-    MUSIC_CHANNEL.send(`queued **${title}**`);
-    QUEUE.push({ title, url, audio });
+    MUSIC_CHANNEL.send(`queued **${videoTitle}**`);
+    QUEUE.push({ title: videoTitle, url, audio: downloadedAudio });
     return;
   }
 
   LOCKED = true;
-  if (audio) {
-    PLAYER.play(audio);
-    await MUSIC_CHANNEL.send(`playing **${title}**`);
-  } else {
-    // TODO: download the audio in parts (dowloading the whole 10 hour file is slow for some reason ¯\_(ツ)_/¯)
-    // and also sometimes yt-dlp downloads the whole video just to extract the audio part
-    const [title, audio] = await Promise.all([
-      getVideoTitle(url),
-      downloadAudio(url),
-    ]);
+  try {
+    let downloadedAudio = audio;
+    let videoTitle = title;
 
-    PLAYER.play(audio);
-    console.log("playing", title, url);
-    await MUSIC_CHANNEL.send(`playing **${title}**`);
+    if (!downloadedAudio) {
+      // Only download if the audio is not provided
+      [videoTitle, downloadedAudio] = await Promise.all([
+        getVideoTitle(url),
+        downloadAudio(url),
+      ]);
+    }
+
+    PLAYER.play(downloadedAudio);
+    console.log("playing", videoTitle, url);
+    await MUSIC_CHANNEL.send(`playing **${videoTitle}**`);
+  } finally {
+    LOCKED = false;
   }
-
-  LOCKED = false;
 }
 
 export async function handleSkip() {
