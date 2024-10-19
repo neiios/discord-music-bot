@@ -28,13 +28,15 @@ export const CLIENT = new Client({
 
 CLIENT.on("messageCreate", async (message: Message) => {
   try {
-    if (isInvalidMessage(message)) return;
     console.log(`command: ${message.content}`);
+    if (isInvalidMessage(message)) return;
 
     const { command, args } = parseCommand(message);
     joinVoiceChannelIfNecessary(message.member?.voice.channel);
 
     if (command === "play") await handlePlay(args[0]);
+    else if (command === "connect" || command === "join")
+      forceJoinVoiceChannel(message.member?.voice.channel);
     else if (command === "skip") await handleSkip();
     else if (command === "list" || command === "queue") await handleList();
     else if (command === "disconnect" || command === "stop") await handleSkip();
@@ -82,6 +84,22 @@ export const BotError = class extends Error {
     this.name = "BotError";
   }
 };
+
+function forceJoinVoiceChannel(channel?: VoiceBasedChannel | null) {
+  if (!channel) throw new BotError("join voice channel first");
+  if (VOICE_CONNECTION) VOICE_CONNECTION.destroy();
+
+  VOICE_CONNECTION = joinVoiceChannel({
+    channelId: channel.id,
+    guildId: channel.guild.id,
+    adapterCreator: channel.guild.voiceAdapterCreator,
+    selfDeaf: false,
+  });
+
+  VOICE_CONNECTION.subscribe(PLAYER);
+
+  MUSIC_CHANNEL.send(`joined ${channel.name}`);
+}
 
 function joinVoiceChannelIfNecessary(channel?: VoiceBasedChannel | null) {
   if (VOICE_CONNECTION) return;
