@@ -27,8 +27,8 @@ function isYoutubeUrl(url: string): boolean {
 }
 
 async function getVideoTitle(url: string): Promise<string> {
-  if (isYoutubeUrl(url)) {
-    return $`yt-dlp --username oauth2 --password unused --get-title -- "${url}"`.text();
+  if (isYoutubeUrl(url) && process.env.YTDLP_USE_OAUTH_PLUGIN === "true") {
+    return $`yt-dlp --username oauth --password unused --get-title -- "${url}"`.text();
   } else {
     return $`yt-dlp --get-title -- "${url}"`.text();
   }
@@ -36,8 +36,8 @@ async function getVideoTitle(url: string): Promise<string> {
 
 async function downloadAudio(url: string): Promise<AudioResource> {
   const urlHash = crypto.createHash("sha256").update(url).digest("hex");
-  if (isYoutubeUrl(url)) {
-    await $`yt-dlp --username oauth2 --password unused --extractor-args youtube:player-client=default,mweb --extract-audio -o "/tmp/${urlHash}.%(ext)s" -- "${url}"`;
+  if (isYoutubeUrl(url) && process.env.YTDLP_USE_OAUTH_PLUGIN === "true") {
+    await $`yt-dlp --username oauth --password unused --extractor-args youtube:player-client=default,mweb --extract-audio -o "/tmp/${urlHash}.%(ext)s" -- "${url}"`;
   } else {
     await $`yt-dlp --extract-audio -o /tmp/${urlHash} -- "${url}"`;
   }

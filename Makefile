@@ -1,3 +1,4 @@
 deploy:
 	git pull
-	podman compose up --build --force-recreate -d
+	podman compose build --no-cache
+	podman compose up --force-recreate -d
