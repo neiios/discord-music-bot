@@ -14,7 +14,12 @@ import {
   VoiceConnectionStatus,
   entersState,
 } from "@discordjs/voice";
-import { handlePlay, handleSkip, handleList } from "./handlers";
+import {
+  handlePlay,
+  handleSkip,
+  handleList,
+  handleDisconnect,
+} from "./handlers";
 
 export const PREFIX = "/";
 export const QUEUE: Song[] = [];
@@ -44,7 +49,7 @@ CLIENT.on("messageCreate", async (message: Message) => {
     } else if (command === "list" || command === "queue") {
       await handleList();
     } else if (command === "disconnect" || command === "stop") {
-      await handleSkip();
+      await handleDisconnect();
     } else {
       throw new BotError("invalid command");
     }
