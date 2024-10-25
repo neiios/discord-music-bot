@@ -11,6 +11,8 @@ import {
   generateDependencyReport,
   VoiceConnection,
   AudioResource,
+  VoiceConnectionStatus,
+  entersState,
 } from "@discordjs/voice";
 import { handlePlay, handleSkip, handleList } from "./handlers";
 
@@ -30,17 +32,22 @@ CLIENT.on("messageCreate", async (message: Message) => {
   try {
     console.log(`command: ${message.content}`);
     if (isInvalidMessage(message)) return;
-
     const { command, args } = parseCommand(message);
-    joinVoiceChannelIfNecessary(message.member?.voice.channel);
 
-    if (command === "play") await handlePlay(args[0]);
-    else if (command === "connect" || command === "join")
-      forceJoinVoiceChannel(message.member?.voice.channel);
-    else if (command === "skip") await handleSkip();
-    else if (command === "list" || command === "queue") await handleList();
-    else if (command === "disconnect" || command === "stop") await handleSkip();
-    else await message.channel.send("invalid command");
+    if (command === "play") {
+      connectToVoiceChannel(message);
+      await handlePlay(args[0]);
+    } else if (command === "connect" || command === "join") {
+      connectToVoiceChannel(message, true);
+    } else if (command === "skip") {
+      await handleSkip();
+    } else if (command === "list" || command === "queue") {
+      await handleList();
+    } else if (command === "disconnect" || command === "stop") {
+      await handleSkip();
+    } else {
+      throw new BotError("invalid command");
+    }
   } catch (err) {
     if (err instanceof BotError) {
       console.log(err);
@@ -85,34 +92,39 @@ export const BotError = class extends Error {
   }
 };
 
-function forceJoinVoiceChannel(channel?: VoiceBasedChannel | null) {
-  if (!channel) throw new BotError("join voice channel first");
-  if (VOICE_CONNECTION) VOICE_CONNECTION.destroy();
+function connectToVoiceChannel(message: Message, force: boolean = false) {
+  if (!message.member?.voice.channel)
+    throw new BotError("join voice channel first");
+  if (VOICE_CONNECTION && !force) return;
 
-  VOICE_CONNECTION = joinVoiceChannel({
-    channelId: channel.id,
-    guildId: channel.guild.id,
-    adapterCreator: channel.guild.voiceAdapterCreator,
-    selfDeaf: false,
+  const connection = joinVoiceChannel({
+    channelId: message.member.voice.channel.id,
+    guildId: message.member.voice.channel.guild.id,
+    adapterCreator: message.member.voice.channel.guild.voiceAdapterCreator,
   });
 
-  VOICE_CONNECTION.subscribe(PLAYER);
+  if (force) MUSIC_CHANNEL.send(`joined ${message.member.voice.channel.name}`);
 
-  MUSIC_CHANNEL.send(`joined ${channel.name}`);
-}
+  // https://discordjs.guide/voice/voice-connections.html#handling-disconnects
+  connection.on(
+    VoiceConnectionStatus.Disconnected,
+    async (oldState, newState) => {
+      try {
+        // Seems to be reconnecting to a new channel - ignore disconnect
+        await Promise.race([
+          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+        ]);
+      } catch (error) {
+        // Seems to be a real disconnect which SHOULDN'T be recovered from
+        connection.destroy();
+        VOICE_CONNECTION = undefined;
+      }
+    },
+  );
 
-function joinVoiceChannelIfNecessary(channel?: VoiceBasedChannel | null) {
-  if (VOICE_CONNECTION) return;
-  if (!channel) throw new BotError("join voice channel first");
-
-  VOICE_CONNECTION = joinVoiceChannel({
-    channelId: channel.id,
-    guildId: channel.guild.id,
-    adapterCreator: channel.guild.voiceAdapterCreator,
-    selfDeaf: false,
-  });
-
-  VOICE_CONNECTION.subscribe(PLAYER);
+  connection.subscribe(PLAYER);
+  VOICE_CONNECTION = connection;
 }
 
 function parseCommand(message: Message) {
