@@ -2,7 +2,6 @@ import {
   Client,
   GatewayIntentBits,
   type GuildTextBasedChannel,
-  type VoiceBasedChannel,
   Message,
 } from "discord.js";
 import {
