@@ -27,87 +27,97 @@ function isYoutubeUrl(url: string): boolean {
 }
 
 function isSpotifyUrl(url: string): boolean {
-    try {
-        const parsedUrl = new URL(url);
-        return parsedUrl.hostname === "open.spotify.com" && parsedUrl.pathname.includes("/track/");
-    } catch (error) {
-        console.error(`Error in isSpotifyUrl: ${error.message}`);
-        return false;
-    }
+  try {
+    const parsedUrl = new URL(url);
+    return (
+      parsedUrl.hostname === "open.spotify.com" &&
+      parsedUrl.pathname.includes("/track/")
+    );
+  } catch (error) {
+    console.error(`Error in isSpotifyUrl: ${error.message}`);
+    return false;
+  }
 }
 
 async function getSpotifyAccessToken(): Promise<string> {
-    const clientId = process.env.SPOTIFY_CLIENT_ID;
-    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+  const clientId = process.env.SPOTIFY_CLIENT_ID;
+  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
 
-    if (!clientId || !clientSecret) {
-        throw new BotError("Spotify credentials are missing.");
-    }
+  if (!clientId || !clientSecret) {
+    throw new BotError("Spotify credentials are missing.");
+  }
 
-    const authString = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  const authString = Buffer.from(`${clientId}:${clientSecret}`).toString(
+    "base64",
+  );
 
-    const response = await fetch("https://accounts.spotify.com/api/token", {
-        method: "POST",
-        headers: {
-            Authorization: `Basic ${authString}`,
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: "grant_type=client_credentials",
-    });
+  const response = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${authString}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: "grant_type=client_credentials",
+  });
 
-    if (!response.ok) {
-        throw new BotError("Failed to retrieve Spotify access token");
-    }
+  if (!response.ok) {
+    throw new BotError("Failed to retrieve Spotify access token");
+  }
 
-    const data = await response.json();
-    return data.access_token;
+  const data = await response.json();
+  return data.access_token;
 }
 
 async function fetchYouTubeUrlFromSpotify(url: string): Promise<string> {
-    const match = url.match(/track\/(\w+)/);
-    if (!match) throw new BotError("Invalid Spotify track URL");
+  const match = url.match(/track\/(\w+)/);
+  if (!match) throw new BotError("Invalid Spotify track URL");
 
-    const trackId = match[1];
-    const accessToken = await getSpotifyAccessToken();
+  const trackId = match[1];
+  const accessToken = await getSpotifyAccessToken();
 
-    const response = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
-        headers: {
-            Authorization: `Bearer ${accessToken}`,
-        },
-    });
+  const response = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
 
-    if (!response.ok) {
-        throw new BotError("Failed to fetch track data from Spotify");
-    }
+  if (!response.ok) {
+    throw new BotError("Failed to fetch track data from Spotify");
+  }
 
-    const data = await response.json();
-    const title = data.name;
-    const artist = data.artists[0].name;
+  const data = await response.json();
+  const title = data.name;
+  const artist = data.artists[0].name;
 
-    const query = `${artist} ${title}`;
-    const searchResult = await $`yt-dlp "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
-    const videoId = searchResult.trim().split("\n")[0];
+  const query = `${artist} ${title}`;
+  const searchResult =
+    await $`yt-dlp "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
+  const videoId = searchResult.trim().split("\n")[0];
 
-    if (!videoId) {
-        throw new BotError("No matching video found on YouTube");
-    }
+  if (!videoId) {
+    throw new BotError("No matching video found on YouTube");
+  }
 
-    return `https://www.youtube.com/watch?v=${videoId}`;
+  return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
 async function handleUrl(url: string): Promise<string> {
-    if (isSpotifyUrl(url)) {
-        return await fetchYouTubeUrlFromSpotify(url);
-    } else if (isYoutubeUrl(url)) {
-        return url;
-    } else {
-        throw new BotError("Unsupported URL format");
-    }
+  if (isSpotifyUrl(url)) {
+    return await fetchYouTubeUrlFromSpotify(url);
+  } else if (isYoutubeUrl(url)) {
+    return url;
+  } else {
+    throw new BotError("Unsupported URL format");
+  }
 }
 
 async function getVideoTitle(url: string): Promise<string> {
-    const youtubeUrl = await handleUrl(url);
+  const youtubeUrl = await handleUrl(url);
+  if (process.env.YTDLP_USE_OAUTH_PLUGIN === "true") {
+    return $`yt-dlp --username oauth2 --password unused --get-title -- "${youtubeUrl}"`.text();
+  } else {
     return $`yt-dlp --get-title -- "${youtubeUrl}"`.text();
+  }
 }
 
 async function downloadAudio(url: string): Promise<AudioResource> {
@@ -143,10 +153,10 @@ export async function handlePlay(
   const url = await handleUrl(maybeUrl);
 
   if (PLAYER.state.status === "playing" || LOCKED) {
-      const [videoTitle, downloadedAudio] = await Promise.all([
-          getVideoTitle(url),
-          downloadAudio(url),
-      ]);
+    const [videoTitle, downloadedAudio] = await Promise.all([
+      getVideoTitle(url),
+      downloadAudio(url),
+    ]);
 
     MUSIC_CHANNEL.send(`queued **${videoTitle}**`);
     QUEUE.push({ title: videoTitle, url, audio: downloadedAudio });
