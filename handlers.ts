@@ -90,8 +90,14 @@ async function fetchYouTubeUrlFromSpotify(url: string): Promise<string> {
   const artist = data.artists[0].name;
 
   const query = `${artist} ${title}`;
-  const searchResult =
-    await $`yt-dlp "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
+  let searchResult;
+  if (process.env.YTDLP_USE_OAUTH_PLUGIN === "true") {
+    searchResult =
+      await $`yt-dlp --username oauth2 --password unused "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
+  } else {
+    searchResult =
+      await $`yt-dlp "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
+  }
   const videoId = searchResult.trim().split("\n")[0];
 
   if (!videoId) {
@@ -104,19 +110,20 @@ async function fetchYouTubeUrlFromSpotify(url: string): Promise<string> {
 async function handleUrl(url: string): Promise<string> {
   if (isSpotifyUrl(url)) {
     return await fetchYouTubeUrlFromSpotify(url);
-  } else if (isYoutubeUrl(url)) {
-    return url;
   } else {
-    throw new BotError("Unsupported URL format");
+    return url;
   }
 }
 
 async function getVideoTitle(url: string): Promise<string> {
-  const youtubeUrl = await handleUrl(url);
-  if (process.env.YTDLP_USE_OAUTH_PLUGIN === "true") {
-    return $`yt-dlp --username oauth2 --password unused --get-title -- "${youtubeUrl}"`.text();
+  const handledUrl = await handleUrl(url);
+  if (
+    isYoutubeUrl(handledUrl) &&
+    process.env.YTDLP_USE_OAUTH_PLUGIN === "true"
+  ) {
+    return $`yt-dlp --username oauth2 --password unused --get-title -- "${handledUrl}"`.text();
   } else {
-    return $`yt-dlp --get-title -- "${youtubeUrl}"`.text();
+    return $`yt-dlp --get-title -- "${handledUrl}"`.text();
   }
 }
 
