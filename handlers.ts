@@ -107,11 +107,22 @@ async function fetchYouTubeUrlFromSpotify(url: string): Promise<string> {
   return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
-async function handleUrl(url: string): Promise<string> {
+async function handleUrl(maybeUrl: string): Promise<string> {
+  const url = await toURL(maybeUrl);
   if (isSpotifyUrl(url)) {
     return await fetchYouTubeUrlFromSpotify(url);
   } else {
     return url;
+  }
+}
+
+async function toURL(maybeUrl: string): Promise<string> {
+  try {
+    new URL(maybeUrl);
+    return maybeUrl;
+  } catch {
+    MUSIC_CHANNEL.send("invalid url");
+    throw new Error("invalid url");
   }
 }
 
