@@ -26,12 +26,88 @@ function isYoutubeUrl(url: string): boolean {
   }
 }
 
+function isSpotifyUrl(url: string): boolean {
+    try {
+        const parsedUrl = new URL(url);
+        return parsedUrl.hostname === "open.spotify.com" && parsedUrl.pathname.includes("/track/");
+    } catch (error) {
+        console.error(`Error in isSpotifyUrl: ${error.message}`);
+        return false;
+    }
+}
+
+async function getSpotifyAccessToken(): Promise<string> {
+    const clientId = process.env.SPOTIFY_CLIENT_ID;
+    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+        throw new BotError("Spotify credentials are missing.");
+    }
+
+    const authString = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+
+    const response = await fetch("https://accounts.spotify.com/api/token", {
+        method: "POST",
+        headers: {
+            Authorization: `Basic ${authString}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: "grant_type=client_credentials",
+    });
+
+    if (!response.ok) {
+        throw new BotError("Failed to retrieve Spotify access token");
+    }
+
+    const data = await response.json();
+    return data.access_token;
+}
+
+async function fetchYouTubeUrlFromSpotify(url: string): Promise<string> {
+    const match = url.match(/track\/(\w+)/);
+    if (!match) throw new BotError("Invalid Spotify track URL");
+
+    const trackId = match[1];
+    const accessToken = await getSpotifyAccessToken();
+
+    const response = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+        },
+    });
+
+    if (!response.ok) {
+        throw new BotError("Failed to fetch track data from Spotify");
+    }
+
+    const data = await response.json();
+    const title = data.name;
+    const artist = data.artists[0].name;
+
+    const query = `${artist} ${title}`;
+    const searchResult = await $`yt-dlp "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
+    const videoId = searchResult.trim().split("\n")[0];
+
+    if (!videoId) {
+        throw new BotError("No matching video found on YouTube");
+    }
+
+    return `https://www.youtube.com/watch?v=${videoId}`;
+}
+
+async function handleUrl(url: string): Promise<string> {
+    if (isSpotifyUrl(url)) {
+        return await fetchYouTubeUrlFromSpotify(url);
+    } else if (isYoutubeUrl(url)) {
+        return url;
+    } else {
+        throw new BotError("Unsupported URL format");
+    }
+}
+
 async function getVideoTitle(url: string): Promise<string> {
-  if (isYoutubeUrl(url) && process.env.YTDLP_USE_OAUTH_PLUGIN === "true") {
-    return $`yt-dlp --username oauth2 --password unused --get-title -- "${url}"`.text();
-  } else {
-    return $`yt-dlp --get-title -- "${url}"`.text();
-  }
+    const youtubeUrl = await handleUrl(url);
+    return $`yt-dlp --get-title -- "${youtubeUrl}"`.text();
 }
 
 async function downloadAudio(url: string): Promise<AudioResource> {
@@ -52,16 +128,6 @@ async function downloadAudio(url: string): Promise<AudioResource> {
   return createAudioResource(stream);
 }
 
-async function toURL(maybeUrl: string): Promise<string> {
-  try {
-    new URL(maybeUrl);
-    return maybeUrl;
-  } catch {
-    MUSIC_CHANNEL.send("invalid url");
-    throw new Error("invalid url");
-  }
-}
-
 export async function handlePlay(
   maybeUrl?: string,
   audio?: AudioResource,
@@ -74,13 +140,13 @@ export async function handlePlay(
 
   // TODO: there is probably a race condition with stop and skip here
   MUSIC_CHANNEL.sendTyping();
-  const url = await toURL(maybeUrl);
+  const url = await handleUrl(maybeUrl);
 
   if (PLAYER.state.status === "playing" || LOCKED) {
-    const [videoTitle, downloadedAudio] = await Promise.all([
-      getVideoTitle(url),
-      downloadAudio(url),
-    ]);
+      const [videoTitle, downloadedAudio] = await Promise.all([
+          getVideoTitle(url),
+          downloadAudio(url),
+      ]);
 
     MUSIC_CHANNEL.send(`queued **${videoTitle}**`);
     QUEUE.push({ title: videoTitle, url, audio: downloadedAudio });
