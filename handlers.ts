@@ -93,7 +93,7 @@ async function fetchYouTubeUrlFromSpotify(url: string): Promise<string> {
   let searchResult;
   if (process.env.YTDLP_USE_OAUTH_PLUGIN === "true") {
     searchResult =
-      await $`yt-dlp --username oauth2 --password unused "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
+      await $`yt-dlp --username=oauth2 --password="" unused "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
   } else {
     searchResult =
       await $`yt-dlp "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
@@ -141,7 +141,7 @@ async function getVideoTitle(url: string): Promise<string> {
 async function downloadAudio(url: string): Promise<AudioResource> {
   const urlHash = crypto.createHash("sha256").update(url).digest("hex");
   if (isYoutubeUrl(url) && process.env.YTDLP_USE_OAUTH_PLUGIN === "true") {
-    await $`yt-dlp --username oauth2 --password unused --extractor-args youtube:player-client=default,mweb --extract-audio -o "/tmp/${urlHash}.%(ext)s" -- "${url}"`;
+    await $`yt-dlp --username=oauth2 --password="" --extractor-args youtube:player-client=default,mweb --extract-audio -o "/tmp/${urlHash}.%(ext)s" -- "${url}"`;
   } else {
     await $`yt-dlp --extract-audio -o /tmp/${urlHash} -- "${url}"`;
   }

@@ -3,6 +3,7 @@ services:
     build: ./.
     init: true
     volumes:
-      - ./cache:/root/.cache # stores oauth token
+      - ./cache:/root/.cache
+      - ./user-cache:/home/bun/app/.cache
       - ./.env:/home/bun/app/.env
     restart: always
