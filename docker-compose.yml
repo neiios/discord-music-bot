@@ -5,5 +5,7 @@ services:
     volumes:
       - ./cache:/root/.cache
       - ./user-cache:/home/bun/app/.cache
+      - ./.netrc:/root/.netrc
+      - ./.netrc:/home/bun/app/.netrc
       - ./.env:/home/bun/app/.env
     restart: always

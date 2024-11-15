@@ -13,19 +13,6 @@ import crypto from "node:crypto";
 
 let LOCKED = false;
 
-function isYoutubeUrl(url: string): boolean {
-  try {
-    const parsedUrl = new URL(url);
-    return (
-      parsedUrl.hostname === "www.youtube.com" ||
-      parsedUrl.hostname === "youtube.com" ||
-      parsedUrl.hostname === "youtu.be"
-    );
-  } catch (e) {
-    return false;
-  }
-}
-
 function isSpotifyUrl(url: string): boolean {
   try {
     const parsedUrl = new URL(url);
@@ -90,14 +77,8 @@ async function fetchYouTubeUrlFromSpotify(url: string): Promise<string> {
   const artist = data.artists[0].name;
 
   const query = `${artist} ${title}`;
-  let searchResult;
-  if (process.env.YTDLP_USE_OAUTH_PLUGIN === "true") {
-    searchResult =
-      await $`yt-dlp --username=oauth --password=unused"ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
-  } else {
-    searchResult =
-      await $`yt-dlp "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
-  }
+  const searchResult =
+    await $`yt-dlp "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
   const videoId = searchResult.trim().split("\n")[0];
 
   if (!videoId) {
@@ -128,23 +109,12 @@ async function toURL(maybeUrl: string): Promise<string> {
 
 async function getVideoTitle(url: string): Promise<string> {
   const handledUrl = await handleUrl(url);
-  if (
-    isYoutubeUrl(handledUrl) &&
-    process.env.YTDLP_USE_OAUTH_PLUGIN === "true"
-  ) {
-    return $`yt-dlp --username=oauth --password=unused --get-title -- "${handledUrl}"`.text();
-  } else {
-    return $`yt-dlp --get-title -- "${handledUrl}"`.text();
-  }
+  return $`yt-dlp --get-title -- "${handledUrl}"`.text();
 }
 
 async function downloadAudio(url: string): Promise<AudioResource> {
   const urlHash = crypto.createHash("sha256").update(url).digest("hex");
-  if (isYoutubeUrl(url) && process.env.YTDLP_USE_OAUTH_PLUGIN === "true") {
-    await $`yt-dlp --username=oauth --password=unused --extractor-args youtube:player-client=default,mweb --extract-audio -o "/tmp/${urlHash}.%(ext)s" -- "${url}"`;
-  } else {
-    await $`yt-dlp --extract-audio -o /tmp/${urlHash} -- "${url}"`;
-  }
+  await $`yt-dlp --extract-audio -o /tmp/${urlHash} -- "${url}"`;
 
   const filename = (await $`ls /tmp/${urlHash}.*`.text()).trim();
   if (!filename) {
