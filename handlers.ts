@@ -78,7 +78,7 @@ async function fetchYouTubeUrlFromSpotify(url: string): Promise<string> {
 
   const query = `${artist} ${title}`;
   const searchResult =
-    await $`yt-dlp "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
+    await $`yt-dlp --netrc "ytsearch:${query}" --get-id --default-search "ytsearch"`.text();
   const videoId = searchResult.trim().split("\n")[0];
 
   if (!videoId) {
@@ -109,12 +109,12 @@ async function toURL(maybeUrl: string): Promise<string> {
 
 async function getVideoTitle(url: string): Promise<string> {
   const handledUrl = await handleUrl(url);
-  return $`yt-dlp --get-title -- "${handledUrl}"`.text();
+  return $`yt-dlp --netrc --get-title -- "${handledUrl}"`.text();
 }
 
 async function downloadAudio(url: string): Promise<AudioResource> {
   const urlHash = crypto.createHash("sha256").update(url).digest("hex");
-  await $`yt-dlp --extract-audio -o /tmp/${urlHash} -- "${url}"`;
+  await $`yt-dlp --netrc --extract-audio -o /tmp/${urlHash} -- "${url}"`;
 
   const filename = (await $`ls /tmp/${urlHash}.*`.text()).trim();
   if (!filename) {
