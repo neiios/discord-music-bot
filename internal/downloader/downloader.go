@@ -11,9 +11,9 @@ import (
 )
 
 func DownloadSong(metadata Metadata) (Song, error) {
-	// yt-dlp --no-playlist --extract-audio --audio-format opus <url>
+	// yt-dlp --no-playlist --extract-audio --audio-format opus <url> -o -
 	slog.Info("downloading song", "metadata", metadata)
-	cmd := exec.Command("yt-dlp", "--no-playlist", "--extract-audio", "--audio-format", "opus", metadata.URL.String())
+	cmd := exec.Command("yt-dlp", "--no-playlist", "--extract-audio", "--audio-format", "opus", metadata.URL.String(), "-o", "-")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -56,7 +56,6 @@ func GetSongMetadata(url *url.URL) (Metadata, error) {
 type Song struct {
 	ID       string   `json:"id"`
 	Metadata Metadata `json:"metadata"`
-	URL      url.URL  `json:"url"`
 	Audio    []byte   `json:"audio"`
 }
 
