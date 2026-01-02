@@ -18,14 +18,14 @@ func TestGetSongMetadataE2E(t *testing.T) {
 			URL:         *url,
 		}
 
-		result, err := GetSongMetadata(url)
+		result, err := GetSongMetadata(*url)
 		assert.NoError(t, err)
 		assert.Equal(t, metadata, result)
 	})
 
 	t.Run("invalid URL", func(t *testing.T) {
 		invalidURL, _ := url.ParseRequestURI("https://www.youtube.com/watch?v=AAAAAAAAAAA")
-		_, err := GetSongMetadata(invalidURL)
+		_, err := GetSongMetadata(*invalidURL)
 		assert.Error(t, err)
 	})
 }

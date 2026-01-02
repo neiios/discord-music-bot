@@ -13,6 +13,7 @@ import (
 	"github.com/neiios/discord-music-bot/internal/downloader"
 	"github.com/neiios/discord-music-bot/internal/env"
 	"github.com/neiios/discord-music-bot/internal/gateway"
+	"github.com/neiios/discord-music-bot/internal/voice"
 )
 
 func main() {
@@ -53,36 +54,9 @@ func main() {
 				}
 				slog.Info("received message", "content", message.Content)
 
-				parts := strings.Split(message.Content, " ")
-				if len(parts) != 2 || parts[0] != "/play" {
-					slog.Info("skipped message", "message", message)
-					continue
+				if err := HandleNewMessage(message, *connection, env); err != nil {
+					slog.Error("failed to handle new message", "error", err)
 				}
-
-				url, err := ParseURL(parts[1])
-				if err != nil {
-					slog.Error("invalid URL", "url", parts[1], "error", err)
-					continue
-				}
-
-				metadata, err := downloader.GetSongMetadata(url)
-				if err != nil {
-					slog.Error("failed to get song metadata", "url", url, "error", err)
-					continue
-				}
-				slog.Info("fetched song metadata", "url", url, "metadata", metadata)
-
-				if metadata.DurationSec > 3*60*60 {
-					slog.Error("song is too long", "title", metadata.Title, "duration", metadata.DurationSec, "url", url)
-				}
-
-				song, error := downloader.DownloadSong(metadata)
-				if error != nil {
-					slog.Error("failed to download the song", "error", error)
-					continue
-				}
-
-				slog.Info("downloaded song", "url", url, "title", song.Metadata.Title)
 			}
 		}
 
@@ -92,19 +66,65 @@ func main() {
 	}
 }
 
-func ParseURL(input string) (*url.URL, error) {
+func HandleNewMessage(message gateway.Message, connection gateway.Connection, env env.Env) error {
+	parts := strings.Split(message.Content, " ")
+	if len(parts) == 0 {
+		return nil
+	}
+
+	switch parts[0] {
+	case "/play":
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid command")
+		}
+
+		url, err := ParseURL(parts[1])
+		if err != nil {
+			slog.Error("failed to parse URL", "input", parts[1], "error", err)
+			return fmt.Errorf("invalid URL")
+		}
+
+		metadata, err := downloader.GetSongMetadata(url)
+		if err != nil {
+			slog.Error("failed to get song metadata", "url", url, "error", err)
+			return fmt.Errorf("failed to get song metadata")
+		}
+		slog.Info("fetched song metadata", "url", url, "metadata", metadata)
+
+		if metadata.DurationSec > 3*60*60 {
+			slog.Error("song is too long", "title", metadata.Title, "duration", metadata.DurationSec, "url", url)
+			return fmt.Errorf("song is too long")
+		}
+
+		song, err := downloader.DownloadSong(metadata)
+		if err != nil {
+			slog.Error("failed to download the song", "error", err)
+			return fmt.Errorf("failed to download the song")
+		}
+
+		slog.Info("downloaded song", "url", url, "title", song.Metadata.Title)
+		return nil
+	case "/connect", "/come":
+		err := voice.InitiateConnection(context.Background(), connection, env)
+		return err
+	default:
+		return nil
+	}
+}
+
+func ParseURL(input string) (url.URL, error) {
 	input = strings.TrimSpace(input)
 
 	u, err := url.ParseRequestURI(input)
 	if err != nil {
-		return nil, fmt.Errorf("malformed URL: %w", err)
+		return url.URL{}, fmt.Errorf("malformed URL: %w", err)
 	}
 	if u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("URL is not absolute")
+		return url.URL{}, fmt.Errorf("URL is not absolute")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("invalid scheme: %s", u.Scheme)
+		return url.URL{}, fmt.Errorf("invalid scheme: %s", u.Scheme)
 	}
 
-	return u, nil
+	return *u, nil
 }

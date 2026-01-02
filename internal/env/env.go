@@ -12,6 +12,7 @@ type Env struct {
 	ClientSecret   string
 	GuildId        string
 	MusicChannelId string
+	VoiceChannelId string
 }
 
 func Read() (Env, error) {
@@ -31,6 +32,7 @@ func Read() (Env, error) {
 	lookup("CLIENT_SECRET", &env.ClientSecret)
 	lookup("GUILD_ID", &env.GuildId)
 	lookup("MUSIC_CHANNEL_ID", &env.MusicChannelId)
+	lookup("VOICE_CHANNEL_ID", &env.VoiceChannelId)
 
 	if len(missing) > 0 {
 		return Env{}, fmt.Errorf("environment variables not set: %v", missing)

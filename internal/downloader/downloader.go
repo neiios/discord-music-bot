@@ -32,7 +32,7 @@ func DownloadSong(metadata Metadata) (Song, error) {
 	return song, nil
 }
 
-func GetSongMetadata(url *url.URL) (Metadata, error) {
+func GetSongMetadata(url url.URL) (Metadata, error) {
 	// yt-dlp --no-playlist --dump-json --extract-audio --audio-format opus <url>
 	cmd := exec.Command("yt-dlp", "--no-playlist", "--dump-json", "--extract-audio", "--audio-format", "opus", url.String())
 	var stdout, stderr bytes.Buffer
@@ -48,7 +48,7 @@ func GetSongMetadata(url *url.URL) (Metadata, error) {
 	if err := json.NewDecoder(&stdout).Decode(&metadata); err != nil {
 		return Metadata{}, err
 	}
-	metadata.URL = *url
+	metadata.URL = url
 
 	return metadata, nil
 }

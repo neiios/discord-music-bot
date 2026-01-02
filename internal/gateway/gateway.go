@@ -75,8 +75,15 @@ func (g *Connection) ReadEvent(ctx context.Context) (Event, error) {
 		return Event{}, err
 	}
 	slog.Info("received event", "event", event)
-
 	return event, nil
+}
+
+func (g *Connection) SendEvent(ctx context.Context, event Event) error {
+	if err := wsjson.Write(ctx, g.connection, event); err != nil {
+		return err
+	}
+	slog.Info("sent event", "event", event)
+	return nil
 }
 
 func (g *Connection) startHeartbeat(ctx context.Context, interval int) {
