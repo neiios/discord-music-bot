@@ -9,11 +9,17 @@ import (
 	"time"
 )
 
+type GatewayURLProvider interface {
+	GetGatewayUrl() (string, error)
+}
+
 type Client struct {
 	BaseUrl string
 	AppId   string
 	Client  *http.Client
 }
+
+var _ GatewayURLProvider = (*Client)(nil)
 
 type authTransport struct {
 	Token     string

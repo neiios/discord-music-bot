@@ -35,7 +35,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	connection, err := gateway.NewConnection(ctx, *discordClient, env.Token)
+	connection, err := gateway.NewConnection(ctx, discordClient, env.Token)
 	if err != nil {
 		slog.Error("failed to connect to gateway", "error", err)
 		os.Exit(1)

@@ -16,7 +16,6 @@ import (
 type Connection struct {
 	sendMu             sync.Mutex
 	connection         *websocket.Conn
-	client             *api.Client
 	token              string
 	LastSequenceNumber *int
 	SessionID          string
@@ -24,7 +23,7 @@ type Connection struct {
 	resumeURL          string
 }
 
-func NewConnection(ctx context.Context, client api.Client, token string) (*Connection, error) {
+func NewConnection(ctx context.Context, client api.GatewayURLProvider, token string) (*Connection, error) {
 	gatewayUrl, err := client.GetGatewayUrl()
 	if err != nil {
 		return nil, err
@@ -48,7 +47,6 @@ func NewConnection(ctx context.Context, client api.Client, token string) (*Conne
 
 	connection := &Connection{
 		connection: websocketConn,
-		client:     &client,
 		token:      token,
 	}
 
