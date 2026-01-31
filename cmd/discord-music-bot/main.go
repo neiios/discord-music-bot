@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/neiios/discord-music-bot/internal/api"
-	"github.com/neiios/discord-music-bot/internal/downloader"
 	"github.com/neiios/discord-music-bot/internal/env"
 	"github.com/neiios/discord-music-bot/internal/gateway"
 	"github.com/neiios/discord-music-bot/internal/voice"
@@ -31,12 +30,18 @@ func main() {
 
 	discordApiBaseUrl := "https://discord.com/api/v10"
 	discordClient, err := api.NewClient(discordApiBaseUrl, env.Token)
+	if err != nil {
+		slog.Error("failed to create discord client", "error", err)
+		os.Exit(1)
+	}
 
 	connection, err := gateway.NewConnection(ctx, *discordClient, env.Token)
 	if err != nil {
 		slog.Error("failed to connect to gateway", "error", err)
 		os.Exit(1)
 	}
+
+	voiceManager := voice.NewManager(ctx, connection, env)
 
 	for {
 		event, err := connection.ReadEvent(ctx)
@@ -45,70 +50,65 @@ func main() {
 			os.Exit(1)
 		}
 
-		if event.Opcode == 0 {
-			if event.Name != nil && *event.Name == "MESSAGE_CREATE" {
-				var message gateway.Message
-				if err := json.Unmarshal(*event.Data, &message); err != nil {
-					slog.Error("failed to unmarshal message", "error", err)
-					os.Exit(1)
-				}
-				slog.Info("received message", "content", message.Content)
-
-				if err := HandleNewMessage(message, *connection, env); err != nil {
-					slog.Error("failed to handle new message", "error", err)
-				}
+		switch {
+		case event.Name != nil && *event.Name == "MESSAGE_CREATE":
+			var message gateway.Message
+			if err := json.Unmarshal(*event.Data, &message); err != nil {
+				slog.Error("failed to unmarshal message", "error", err)
+				continue
 			}
-		}
-
-		if event.SequenceNumber != nil {
-			connection.LastSequenceNumber = event.SequenceNumber
+			handleMessage(ctx, message, voiceManager, env)
+		case event.Name != nil && *event.Name == "VOICE_STATE_UPDATE":
+			var state gateway.VoiceState
+			if err := json.Unmarshal(*event.Data, &state); err != nil {
+				slog.Error("failed to parse voice state update", "error", err)
+				continue
+			}
+			voiceManager.HandleVoiceStateUpdate(state)
+		case event.Name != nil && *event.Name == "VOICE_SERVER_UPDATE":
+			var update gateway.VoiceServerUpdate
+			if err := json.Unmarshal(*event.Data, &update); err != nil {
+				slog.Error("failed to parse voice server update", "error", err)
+				continue
+			}
+			voiceManager.HandleVoiceServerUpdate(update)
 		}
 	}
 }
 
-func HandleNewMessage(message gateway.Message, connection gateway.Connection, env env.Env) error {
-	parts := strings.Split(message.Content, " ")
+func handleMessage(ctx context.Context, message gateway.Message, manager *voice.Manager, env env.Env) {
+	if message.ChannelID != env.MusicChannelId {
+		return
+	}
+	if message.GuildID != "" && message.GuildID != env.GuildId {
+		return
+	}
+
+	parts := strings.Fields(message.Content)
 	if len(parts) == 0 {
-		return nil
+		return
 	}
 
 	switch parts[0] {
 	case "/play":
 		if len(parts) != 2 {
-			return fmt.Errorf("invalid command")
+			slog.Error("invalid play command", "content", message.Content)
+			return
 		}
 
-		url, err := ParseURL(parts[1])
+		u, err := ParseURL(parts[1])
 		if err != nil {
 			slog.Error("failed to parse URL", "input", parts[1], "error", err)
-			return fmt.Errorf("invalid URL")
+			return
 		}
 
-		metadata, err := downloader.GetSongMetadata(url)
-		if err != nil {
-			slog.Error("failed to get song metadata", "url", url, "error", err)
-			return fmt.Errorf("failed to get song metadata")
-		}
-		slog.Info("fetched song metadata", "url", url, "metadata", metadata)
-
-		if metadata.DurationSec > 3*60*60 {
-			slog.Error("song is too long", "title", metadata.Title, "duration", metadata.DurationSec, "url", url)
-			return fmt.Errorf("song is too long")
-		}
-
-		song, err := downloader.DownloadSong(metadata)
-		if err != nil {
-			slog.Error("failed to download the song", "error", err)
-			return fmt.Errorf("failed to download the song")
-		}
-
-		slog.Info("downloaded song", "url", url, "title", song.Metadata.Title)
-		return nil
+		slog.Info("enqueueing song", "url", u.String())
+		manager.HandlePlay(ctx, u)
 	case "/connect", "/come":
-		err := voice.InitiateConnection(context.Background(), connection, env)
-		return err
+		if err := manager.HandleConnect(ctx); err != nil {
+			slog.Error("failed to request voice connection", "error", err)
+		}
 	default:
-		return nil
 	}
 }
 

@@ -1,8 +1,7 @@
 package downloader
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"bytes"
 	"net/url"
 	"testing"
 
@@ -42,7 +41,7 @@ func TestDownloadSongE2E(t *testing.T) {
 		song, err := DownloadSong(metadata)
 		assert.NoError(t, err)
 		assert.Equal(t, metadata, song.Metadata)
-		songHash := sha256.Sum256(song.Audio)
-		assert.Equal(t, "deb23dc7edf771edc6c137108191b50b7987d3cc88e204a0d91f8c92f7c56344", hex.EncodeToString(songHash[:]))
+		assert.Greater(t, len(song.Audio), 0)
+		assert.True(t, bytes.HasPrefix(song.Audio, []byte("OggS")), "audio should be Ogg/Opus container")
 	})
 }

@@ -5,28 +5,41 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/google/uuid"
 )
 
 func DownloadSong(metadata Metadata) (Song, error) {
-	// yt-dlp --no-playlist --extract-audio --audio-format opus <url> -o -
+	// yt-dlp --no-playlist --extract-audio --audio-format opus <url> -o <temp>.opus
 	slog.Info("downloading song", "metadata", metadata)
-	cmd := exec.Command("yt-dlp", "--no-playlist", "--extract-audio", "--audio-format", "opus", metadata.URL.String(), "-o", "-")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
+	tmpDir, err := os.MkdirTemp("", "discord-music-*")
 	if err != nil {
+		return Song{}, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpPath := filepath.Join(tmpDir, "audio.opus")
+
+	cmd := exec.Command("yt-dlp", "--no-playlist", "--extract-audio", "--audio-format", "opus", metadata.URL.String(), "-o", tmpPath)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
 		slog.Info("yt-dlp stderr", "stderr", stderr.String())
+		return Song{}, err
+	}
+
+	audio, err := os.ReadFile(tmpPath)
+	if err != nil {
 		return Song{}, err
 	}
 
 	song := Song{
 		ID:       uuid.NewString(),
 		Metadata: metadata,
-		Audio:    stdout.Bytes(),
+		Audio:    audio,
 	}
 
 	return song, nil

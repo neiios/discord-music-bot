@@ -8,7 +8,7 @@ import (
 	"github.com/neiios/discord-music-bot/internal/gateway"
 )
 
-func InitiateConnection(ctx context.Context, connection gateway.Connection, env env.Env) error {
+func InitiateConnection(ctx context.Context, connection *gateway.Connection, env env.Env) error {
 	data, err := json.Marshal(VoiceStateUpdateData{
 		ChannelID: env.VoiceChannelId,
 		GuildID:   env.GuildId,
@@ -23,11 +23,7 @@ func InitiateConnection(ctx context.Context, connection gateway.Connection, env 
 		Opcode: 4,
 		Data:   &rawData,
 	}
-	err = connection.SendEvent(ctx, event)
-	if err != nil {
-		return err
-	}
-	return nil
+	return connection.SendEvent(ctx, event)
 }
 
 type VoiceStateUpdateData struct {

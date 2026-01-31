@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/url"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -12,10 +14,14 @@ import (
 )
 
 type Connection struct {
+	sendMu             sync.Mutex
 	connection         *websocket.Conn
 	client             *api.Client
 	token              string
 	LastSequenceNumber *int
+	SessionID          string
+	SelfID             string
+	resumeURL          string
 }
 
 func NewConnection(ctx context.Context, client api.Client, token string) (*Connection, error) {
@@ -24,7 +30,17 @@ func NewConnection(ctx context.Context, client api.Client, token string) (*Conne
 		return nil, err
 	}
 
-	websocketConn, res, err := websocket.Dial(context.Background(), gatewayUrl, nil)
+	parsedUrl, err := url.Parse(gatewayUrl)
+	if err != nil {
+		return nil, err
+	}
+
+	query := parsedUrl.Query()
+	query.Set("v", "10")
+	query.Set("encoding", "json")
+	parsedUrl.RawQuery = query.Encode()
+
+	websocketConn, res, err := websocket.Dial(ctx, parsedUrl.String(), nil)
 	slog.Info("connected to gateway", "res", res)
 	if err != nil {
 		return nil, err
@@ -50,19 +66,30 @@ func NewConnection(ctx context.Context, client api.Client, token string) (*Conne
 			Browser: "templeos",
 			Device:  "templeos",
 		},
-		Intents: (1 << 9) | (1 << 10) | (1 << 15),
+		Intents: (1 << 0) | (1 << 7) | (1 << 9) | (1 << 10) | (1 << 15),
 	}
 
-	connection.sendIdentify(ctx, identify)
+	if err := connection.sendIdentify(ctx, identify); err != nil {
+		return nil, err
+	}
+
 	event, err = connection.ReadEvent(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if event.Opcode != 0 && event.Name != nil && *event.Name != "READY" {
+	if event.Name == nil || *event.Name != "READY" {
 		slog.Error("expected ready event after identify", "event", event)
 		return nil, err
 	}
-	// TODO: parse ready event and store session id, resume url
+
+	var ready ReadyEvent
+	if err := json.Unmarshal(*event.Data, &ready); err != nil {
+		return nil, err
+	}
+
+	connection.SessionID = ready.SessionID
+	connection.SelfID = ready.User.ID
+	connection.resumeURL = ready.ResumeGatewayURL
 
 	slog.Info("gateway connection established")
 
@@ -74,11 +101,18 @@ func (g *Connection) ReadEvent(ctx context.Context) (Event, error) {
 	if err := wsjson.Read(ctx, g.connection, &event); err != nil {
 		return Event{}, err
 	}
+
+	if event.SequenceNumber != nil {
+		g.LastSequenceNumber = event.SequenceNumber
+	}
 	slog.Info("received event", "event", event)
 	return event, nil
 }
 
 func (g *Connection) SendEvent(ctx context.Context, event Event) error {
+	g.sendMu.Lock()
+	defer g.sendMu.Unlock()
+
 	if err := wsjson.Write(ctx, g.connection, event); err != nil {
 		return err
 	}
@@ -114,7 +148,7 @@ func (g *Connection) sendHeartbeat(ctx context.Context) error {
 	}
 	raw := json.RawMessage(d)
 	event := Event{Opcode: 1, Data: &raw}
-	if err := wsjson.Write(ctx, g.connection, event); err != nil {
+	if err := g.SendEvent(ctx, event); err != nil {
 		return err
 	}
 	slog.Info("sent heartbeat", "event", event)
@@ -129,7 +163,7 @@ func (g *Connection) sendIdentify(ctx context.Context, identify Identify) error 
 	d := json.RawMessage(payload)
 	event := Event{Opcode: 2, Data: &d}
 
-	if err = wsjson.Write(ctx, g.connection, event); err != nil {
+	if err = g.SendEvent(ctx, event); err != nil {
 		slog.Error("sending identify failed", "error", err)
 		return err
 	}
