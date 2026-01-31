@@ -40,8 +40,8 @@ func NewConnection(ctx context.Context, client api.Client, token string) (*Conne
 	query.Set("encoding", "json")
 	parsedUrl.RawQuery = query.Encode()
 
-	websocketConn, res, err := websocket.Dial(ctx, parsedUrl.String(), nil)
-	slog.Info("connected to gateway", "res", res)
+	websocketConn, _, err := websocket.Dial(ctx, parsedUrl.String(), nil)
+	slog.Info("connected to gateway")
 	if err != nil {
 		return nil, err
 	}

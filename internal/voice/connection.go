@@ -102,8 +102,8 @@ func Connect(ctx context.Context, userID string, state gateway.VoiceState, serve
 		endpoint = endpoint + "&v=8"
 	}
 
-	wsConn, res, err := websocket.Dial(ctx, endpoint, nil)
-	slog.Info("connected to voice gateway", "endpoint", endpoint, "res", res)
+	wsConn, _, err := websocket.Dial(ctx, endpoint, nil)
+	slog.Info("connected to voice gateway", "endpoint", endpoint)
 	if err != nil {
 		return nil, err
 	}
