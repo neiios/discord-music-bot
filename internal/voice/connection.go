@@ -24,6 +24,8 @@ import (
 
 const (
 	payloadTypeOpus = 0x78
+	frameSize       = 960 // 20ms at 48kHz
+	frameDuration   = 20 * time.Millisecond
 )
 
 var silenceFrame = []byte{0xF8, 0xFF, 0xFE}
@@ -76,23 +78,64 @@ type speakingPayload struct {
 	SSRC     uint32 `json:"ssrc"`
 }
 
+// Connection represents a voice connection to Discord.
+// It manages both WebSocket and UDP connections for voice communication.
 type Connection struct {
-	conn            *websocket.Conn
-	udpConn         *net.UDPConn
-	udpAddr         *net.UDPAddr
-	mode            string
-	secretKey       []byte
-	aead            cipher.AEAD
-	ssrc            uint32
-	sequence        uint16
-	timestamp       uint32
-	nonce           uint32
-	sendMu          sync.Mutex
-	heartbeatCancel context.CancelFunc
+	sync.RWMutex
+
+	// Public state
+	Ready bool // If true, voice is ready to send audio
+
+	// Channel for sending opus audio frames
+	OpusSend chan []byte
+
+	// Internal connections
+	wsConn  *websocket.Conn
+	wsMutex sync.Mutex
+	udpConn *net.UDPConn
+	udpAddr *net.UDPAddr
+
+	// Encryption
+	mode      string
+	secretKey []byte
+	aead      cipher.AEAD
+
+	// RTP state
+	ssrc      uint32
+	sequence  uint16
+	timestamp uint32
+	nonce     uint32
+
+	// State flags
+	speaking     bool
+	reconnecting bool
+
+	// Signal channel for closing goroutines
+	close chan struct{}
+
+	// Connection info for reconnection
+	userID    string
+	guildID   string
+	channelID string
+	sessionID string
+	token     string
+	endpoint  string
+
+	// References for reconnection
+	mainGateway *gateway.Connection
 }
 
-func Connect(ctx context.Context, userID string, state gateway.VoiceState, server gateway.VoiceServerUpdate) (*Connection, error) {
-	endpoint := server.Endpoint
+// ConnectionConfig holds the configuration for establishing a voice connection.
+type ConnectionConfig struct {
+	UserID      string
+	State       gateway.VoiceState
+	Server      gateway.VoiceServerUpdate
+	MainGateway *gateway.Connection
+}
+
+// Connect establishes a new voice connection to Discord.
+func Connect(ctx context.Context, cfg ConnectionConfig) (*Connection, error) {
+	endpoint := cfg.Server.Endpoint
 	if !strings.HasPrefix(endpoint, "wss://") {
 		endpoint = "wss://" + endpoint
 	}
@@ -103,145 +146,209 @@ func Connect(ctx context.Context, userID string, state gateway.VoiceState, serve
 	}
 
 	wsConn, _, err := websocket.Dial(ctx, endpoint, nil)
-	slog.Info("connected to voice gateway", "endpoint", endpoint)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to dial voice gateway: %w", err)
+	}
+	slog.Info("connected to voice gateway", "endpoint", endpoint)
+
+	c := &Connection{
+		wsConn:      wsConn,
+		userID:      cfg.UserID,
+		guildID:     cfg.State.GuildID,
+		channelID:   cfg.State.ChannelID,
+		sessionID:   cfg.State.SessionID,
+		token:       cfg.Server.Token,
+		endpoint:    cfg.Server.Endpoint,
+		mainGateway: cfg.MainGateway,
+		close:       make(chan struct{}),
+		OpusSend:    make(chan []byte, 2),
 	}
 
-	c := &Connection{conn: wsConn}
-	if err := c.establish(ctx, userID, state, server); err != nil {
+	if err := c.establish(ctx, cfg.State, cfg.Server); err != nil {
 		c.Close()
 		return nil, err
 	}
 
-	go c.listen(ctx)
-
 	return c, nil
 }
 
+// Close closes the voice connection and all associated resources.
 func (c *Connection) Close() {
-	if c.heartbeatCancel != nil {
-		c.heartbeatCancel()
+	c.Lock()
+	defer c.Unlock()
+
+	c.Ready = false
+	c.speaking = false
+
+	// Signal all goroutines to stop
+	if c.close != nil {
+		select {
+		case <-c.close:
+			// Already closed
+		default:
+			close(c.close)
+		}
 	}
-	if c.conn != nil {
-		c.conn.Close(websocket.StatusNormalClosure, "closing")
-	}
+
 	if c.udpConn != nil {
 		c.udpConn.Close()
+		c.udpConn = nil
+	}
+
+	if c.wsConn != nil {
+		c.wsConn.Close(websocket.StatusNormalClosure, "closing")
+		c.wsConn = nil
 	}
 }
 
-func (c *Connection) establish(ctx context.Context, userID string, state gateway.VoiceState, server gateway.VoiceServerUpdate) error {
-	helloEvent, err := c.readEvent(ctx)
-	if err != nil {
+// WaitUntilConnected blocks until the connection is ready or the timeout expires.
+func (c *Connection) WaitUntilConnected(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		c.RLock()
+		ready := c.Ready
+		c.RUnlock()
+
+		if ready {
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for voice connection")
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// Speaking sends a speaking notification to Discord over the voice websocket.
+func (c *Connection) Speaking(enabled bool) error {
+	c.RLock()
+	wsConn := c.wsConn
+	ssrc := c.ssrc
+	c.RUnlock()
+
+	if wsConn == nil {
+		return fmt.Errorf("no voice websocket connection")
+	}
+
+	speaking := 0
+	if enabled {
+		speaking = 1
+	}
+
+	payload := speakingPayload{Speaking: speaking, Delay: 0, SSRC: ssrc}
+	if err := c.sendEvent(context.Background(), 5, payload); err != nil {
 		return err
 	}
+
+	c.Lock()
+	c.speaking = enabled
+	c.Unlock()
+
+	return nil
+}
+
+func (c *Connection) establish(ctx context.Context, state gateway.VoiceState, server gateway.VoiceServerUpdate) error {
+	helloEvent, err := c.readEvent(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to read hello: %w", err)
+	}
 	if helloEvent.Opcode != 8 {
-		return fmt.Errorf("expected hello event, got opcode %d", helloEvent.Opcode)
+		return fmt.Errorf("expected hello event (op 8), got opcode %d", helloEvent.Opcode)
 	}
 
 	var hello voiceHello
 	if err := json.Unmarshal(helloEvent.Data, &hello); err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal hello: %w", err)
 	}
 
 	identify := voiceIdentify{
 		ServerID:  state.GuildID,
-		UserID:    userID,
+		UserID:    c.userID,
 		SessionID: state.SessionID,
 		Token:     server.Token,
 		Video:     false,
 	}
 	if err := c.sendEvent(ctx, 0, identify); err != nil {
-		return err
+		return fmt.Errorf("failed to send identify: %w", err)
 	}
 
-	heartbeatCtx, cancel := context.WithCancel(ctx)
-	c.heartbeatCancel = cancel
-	c.startHeartbeat(heartbeatCtx, time.Duration(hello.HeartbeatInterval)*time.Millisecond)
+	// Start heartbeat
+	go c.wsHeartbeat(time.Duration(hello.HeartbeatInterval) * time.Millisecond)
 
 	var ready voiceReady
-	readyReceived := false
 	modeSelected := ""
+
 	for {
 		event, err := c.readEvent(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read event during establish: %w", err)
 		}
 
 		switch event.Opcode {
-		case 2:
+		case 2: // READY
 			if err := json.Unmarshal(event.Data, &ready); err != nil {
-				return err
+				return fmt.Errorf("failed to unmarshal ready: %w", err)
 			}
-			readyReceived = true
 			slog.Info("voice ready", "ssrc", ready.SSRC, "ip", ready.IP, "port", ready.Port)
+
 			modeSelected = chooseMode(ready.Modes)
 			if modeSelected == "" {
-				return fmt.Errorf("no supported encryption modes")
+				return fmt.Errorf("no supported encryption modes available")
 			}
 
 			if err := c.setupUDP(ctx, ready, modeSelected); err != nil {
-				return err
+				return fmt.Errorf("failed to setup UDP: %w", err)
 			}
-		case 4:
+
+		case 4: // SESSION DESCRIPTION
 			var desc sessionDescription
 			if err := json.Unmarshal(event.Data, &desc); err != nil {
-				return err
+				return fmt.Errorf("failed to unmarshal session description: %w", err)
 			}
 			c.mode = desc.Mode
 			c.secretKey = desc.SecretKey
-			if err := c.bindCipher(); err != nil {
-				return err
-			}
-			return nil
-		case 6:
-			slog.Debug("voice heartbeat ack")
-		case 9:
-			slog.Info("voice resumed")
-		default:
-			slog.Info("voice gateway event", "opcode", event.Opcode)
-		}
 
-		if readyReceived && c.udpConn == nil {
-			return fmt.Errorf("voice ready received without UDP setup")
+			if err := c.bindCipher(); err != nil {
+				return fmt.Errorf("failed to bind cipher: %w", err)
+			}
+
+			// Start background goroutines
+			go c.wsListen()
+			go c.udpKeepAlive()
+			go c.opusSender()
+
+			// Mark as ready
+			c.Lock()
+			c.Ready = true
+			c.Unlock()
+
+			slog.Info("voice connection established", "mode", c.mode)
+			return nil
+
+		case 6: // HEARTBEAT ACK
+			slog.Debug("voice heartbeat ack during establish")
+
+		default:
+			slog.Debug("voice gateway event during establish", "opcode", event.Opcode)
 		}
 	}
-}
-
-func (c *Connection) startHeartbeat(ctx context.Context, interval time.Duration) {
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-
-		nonce := rand.Int63()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				nonce++
-				if err := c.sendEvent(ctx, 3, nonce); err != nil {
-					slog.Error("voice heartbeat failed", "error", err)
-					return
-				}
-			}
-		}
-	}()
 }
 
 func (c *Connection) setupUDP(ctx context.Context, ready voiceReady, mode string) error {
 	address := fmt.Sprintf("%s:%d", ready.IP, ready.Port)
 	remoteAddr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to resolve UDP address: %w", err)
 	}
 
 	udpConn, err := net.DialUDP("udp", nil, remoteAddr)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to dial UDP: %w", err)
 	}
 
+	// IP Discovery
 	discovery := make([]byte, 74)
 	binary.BigEndian.PutUint16(discovery[0:], 0x1)
 	binary.BigEndian.PutUint16(discovery[2:], 70)
@@ -254,28 +361,28 @@ func (c *Connection) setupUDP(ctx context.Context, ready voiceReady, mode string
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := udpConn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 			udpConn.Close()
-			return err
+			return fmt.Errorf("failed to set UDP deadline: %w", err)
 		}
 
 		if _, err := udpConn.Write(discovery); err != nil {
 			udpConn.Close()
-			return err
+			return fmt.Errorf("failed to write discovery: %w", err)
 		}
 
 		n, err := udpConn.Read(response)
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				slog.Warn("udp discovery timed out, retrying", "attempt", attempt+1)
+				slog.Warn("UDP discovery timed out, retrying", "attempt", attempt+1)
 				continue
 			}
 			udpConn.Close()
-			return err
+			return fmt.Errorf("failed to read discovery response: %w", err)
 		}
 
 		parsedIP, parsedPort, err := parseIPDiscovery(response[:n])
 		if err != nil {
 			udpConn.Close()
-			return err
+			return fmt.Errorf("failed to parse IP discovery: %w", err)
 		}
 
 		ip = parsedIP
@@ -285,9 +392,10 @@ func (c *Connection) setupUDP(ctx context.Context, ready voiceReady, mode string
 
 	if ip == "" {
 		udpConn.Close()
-		return fmt.Errorf("udp discovery failed after retries")
+		return fmt.Errorf("UDP discovery failed after retries")
 	}
 
+	// Send select protocol
 	payload := selectProtocol{
 		Protocol: "udp",
 		Data: selectProtocolData{
@@ -298,69 +406,182 @@ func (c *Connection) setupUDP(ctx context.Context, ready voiceReady, mode string
 	}
 	if err := c.sendEvent(ctx, 1, payload); err != nil {
 		udpConn.Close()
-		return err
+		return fmt.Errorf("failed to send select protocol: %w", err)
 	}
 
+	// Clear deadline
 	if err := udpConn.SetDeadline(time.Time{}); err != nil {
 		udpConn.Close()
-		return err
+		return fmt.Errorf("failed to clear UDP deadline: %w", err)
 	}
 
 	c.udpConn = udpConn
 	c.udpAddr = remoteAddr
 	c.ssrc = ready.SSRC
 
+	// Initialize RTP state with random values
 	seed := rand.New(rand.NewSource(time.Now().UnixNano()))
 	c.sequence = uint16(seed.Uint32())
 	c.timestamp = seed.Uint32()
 	c.nonce = seed.Uint32()
 
+	slog.Info("UDP connection established", "localIP", ip, "localPort", port)
 	return nil
 }
 
-func (c *Connection) SendOpusPackets(ctx context.Context, packets [][]byte) error {
-	if c.aead == nil {
-		return fmt.Errorf("voice connection not ready")
-	}
-
-	if err := c.sendSpeaking(ctx, true); err != nil {
-		return err
-	}
-	defer c.sendSpeaking(context.Background(), false)
-
-	ticker := time.NewTicker(20 * time.Millisecond)
+// wsHeartbeat sends regular heartbeats to keep the voice connection alive.
+func (c *Connection) wsHeartbeat(interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for i, packet := range packets {
-		if i > 0 {
+	nonce := rand.Int63()
+
+	for {
+		select {
+		case <-c.close:
+			return
+		case <-ticker.C:
+			nonce++
+			if err := c.sendEvent(context.Background(), 3, nonce); err != nil {
+				slog.Error("voice heartbeat failed", "error", err)
+				go c.reconnect()
+				return
+			}
+			slog.Debug("voice heartbeat sent")
+		}
+	}
+}
+
+// wsListen listens for voice websocket events.
+func (c *Connection) wsListen() {
+	for {
+		c.RLock()
+		wsConn := c.wsConn
+		c.RUnlock()
+
+		if wsConn == nil {
+			return
+		}
+
+		event, err := c.readEvent(context.Background())
+		if err != nil {
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-ticker.C:
+			case <-c.close:
+				return
+			default:
+				status := websocket.CloseStatus(err)
+				if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
+					return
+				}
+				// Check for code 4014 (manual disconnection)
+				if status == 4014 {
+					slog.Info("received 4014 manual disconnection")
+					c.Close()
+					return
+				}
+				slog.Error("voice gateway read failed", "error", err)
+				go c.reconnect()
+				return
 			}
 		}
 
-		if err := c.sendRTPPacket(packet); err != nil {
-			return err
+		switch event.Opcode {
+		case 6: // HEARTBEAT ACK
+			slog.Debug("voice heartbeat ack")
+		case 9: // RESUMED
+			slog.Info("voice resumed")
+		case 13: // CLIENT DISCONNECT
+			slog.Info("voice client disconnect")
+		default:
+			slog.Debug("voice gateway event", "opcode", event.Opcode)
 		}
 	}
+}
 
-	for i := 0; i < 5; i++ {
+// udpKeepAlive sends UDP keepalive packets to maintain the connection.
+func (c *Connection) udpKeepAlive() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	var sequence uint64
+	packet := make([]byte, 8)
+
+	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-c.close:
+			return
 		case <-ticker.C:
-		}
+			c.RLock()
+			udpConn := c.udpConn
+			c.RUnlock()
 
-		if err := c.sendRTPPacket(silenceFrame); err != nil {
-			return err
+			if udpConn == nil {
+				return
+			}
+
+			binary.LittleEndian.PutUint64(packet, sequence)
+			sequence++
+
+			if _, err := udpConn.Write(packet); err != nil {
+				slog.Error("UDP keepalive failed", "error", err)
+				return
+			}
+			slog.Debug("UDP keepalive sent")
 		}
 	}
+}
 
-	return nil
+// opusSender reads opus frames from OpusSend and sends them over UDP.
+func (c *Connection) opusSender() {
+	ticker := time.NewTicker(frameDuration)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.close:
+			return
+		case frame, ok := <-c.OpusSend:
+			if !ok {
+				return
+			}
+
+			// Auto-send speaking notification
+			c.RLock()
+			speaking := c.speaking
+			c.RUnlock()
+
+			if !speaking {
+				if err := c.Speaking(true); err != nil {
+					slog.Error("failed to send speaking notification", "error", err)
+				}
+			}
+
+			// Send the frame
+			if err := c.sendRTPPacket(frame); err != nil {
+				slog.Error("failed to send RTP packet", "error", err)
+				go c.reconnect()
+				return
+			}
+
+			// Wait for next tick to maintain timing
+			select {
+			case <-c.close:
+				return
+			case <-ticker.C:
+				// Continue
+			}
+		}
+	}
 }
 
 func (c *Connection) sendRTPPacket(payload []byte) error {
+	c.Lock()
+	defer c.Unlock()
+
+	if c.udpConn == nil || c.aead == nil {
+		return fmt.Errorf("voice connection not ready")
+	}
+
 	header := make([]byte, 12)
 	header[0] = 0x80
 	header[1] = payloadTypeOpus
@@ -369,12 +590,13 @@ func (c *Connection) sendRTPPacket(payload []byte) error {
 	binary.BigEndian.PutUint32(header[8:], c.ssrc)
 
 	c.sequence++
-	c.timestamp += 960
+	c.timestamp += frameSize
 
+	// Encrypt with nonce
 	nonceSuffix := make([]byte, 4)
-	binary.BigEndian.PutUint32(nonceSuffix, c.nonce)
+	binary.LittleEndian.PutUint32(nonceSuffix, c.nonce)
 	nonceBuf := make([]byte, c.aead.NonceSize())
-	binary.BigEndian.PutUint32(nonceBuf, c.nonce)
+	binary.LittleEndian.PutUint32(nonceBuf, c.nonce)
 	c.nonce++
 
 	ciphertext := c.aead.Seal(nil, nonceBuf, payload, header)
@@ -385,18 +607,82 @@ func (c *Connection) sendRTPPacket(payload []byte) error {
 	return err
 }
 
-func (c *Connection) sendSpeaking(ctx context.Context, enabled bool) error {
-	speaking := 0
-	if enabled {
-		speaking = 1
+// reconnect attempts to reconnect the voice connection with exponential backoff.
+func (c *Connection) reconnect() {
+	c.Lock()
+	if c.reconnecting {
+		c.Unlock()
+		slog.Info("already reconnecting, skipping")
+		return
 	}
+	c.reconnecting = true
+	c.Unlock()
 
-	return c.sendEvent(ctx, 5, speakingPayload{Speaking: speaking, Delay: 0, SSRC: c.ssrc})
+	defer func() {
+		c.Lock()
+		c.reconnecting = false
+		c.Unlock()
+	}()
+
+	slog.Info("attempting voice reconnection")
+
+	// Close existing connections
+	c.Close()
+
+	wait := time.Duration(1) * time.Second
+	maxWait := time.Duration(600) * time.Second
+
+	for attempt := 1; ; attempt++ {
+		time.Sleep(wait)
+
+		c.RLock()
+		mainGateway := c.mainGateway
+		c.RUnlock()
+
+		if mainGateway == nil {
+			slog.Error("cannot reconnect: no main gateway reference")
+			return
+		}
+
+		slog.Info("reconnection attempt", "attempt", attempt, "wait", wait)
+
+		// Request new voice connection via main gateway
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+		// Send voice state update to re-join
+		data, err := json.Marshal(VoiceStateUpdateData{
+			ChannelID: c.channelID,
+			GuildID:   c.guildID,
+			SelfMute:  false,
+			SelfDeaf:  false,
+		})
+		if err != nil {
+			cancel()
+			slog.Error("failed to marshal voice state update", "error", err)
+			continue
+		}
+
+		rawData := json.RawMessage(data)
+		event := gateway.Event{Opcode: 4, Data: &rawData}
+		if err := mainGateway.SendEvent(ctx, event); err != nil {
+			cancel()
+			slog.Error("failed to send voice state update for reconnection", "error", err)
+		} else {
+			slog.Info("sent voice state update for reconnection")
+		}
+		cancel()
+
+		// Exponential backoff
+		wait *= 2
+		if wait > maxWait {
+			wait = maxWait
+		}
+	}
 }
 
 func (c *Connection) readEvent(ctx context.Context) (voiceEvent, error) {
 	var event voiceEvent
-	if err := wsjson.Read(ctx, c.conn, &event); err != nil {
+	if err := wsjson.Read(ctx, c.wsConn, &event); err != nil {
 		return voiceEvent{}, err
 	}
 	return event, nil
@@ -410,38 +696,10 @@ func (c *Connection) sendEvent(ctx context.Context, opcode int, payload any) err
 	raw := json.RawMessage(data)
 	event := voiceEvent{Opcode: opcode, Data: raw}
 
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
+	c.wsMutex.Lock()
+	defer c.wsMutex.Unlock()
 
-	return wsjson.Write(ctx, c.conn, event)
-}
-
-func (c *Connection) listen(ctx context.Context) {
-	for {
-		event, err := c.readEvent(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			status := websocket.CloseStatus(err)
-			if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
-				return
-			}
-			slog.Error("voice gateway read failed", "error", err)
-			return
-		}
-
-		switch event.Opcode {
-		case 6:
-			slog.Debug("voice heartbeat ack")
-		case 9:
-			slog.Info("voice resumed")
-		case 13:
-			slog.Info("voice client disconnect")
-		default:
-			slog.Info("voice gateway event", "opcode", event.Opcode)
-		}
-	}
+	return wsjson.Write(ctx, c.wsConn, event)
 }
 
 func chooseMode(modes []string) string {
@@ -470,17 +728,17 @@ func (c *Connection) bindCipher() error {
 		if err != nil {
 			return err
 		}
-		cipher, err := cipher.NewGCM(block)
+		aead, err := cipher.NewGCM(block)
 		if err != nil {
 			return err
 		}
-		c.aead = cipher
+		c.aead = aead
 	case "aead_xchacha20_poly1305_rtpsize":
-		cipher, err := chacha20poly1305.NewX(c.secretKey)
+		aead, err := chacha20poly1305.NewX(c.secretKey)
 		if err != nil {
 			return err
 		}
-		c.aead = cipher
+		c.aead = aead
 	default:
 		return fmt.Errorf("unsupported encryption mode: %s", c.mode)
 	}
@@ -490,7 +748,7 @@ func (c *Connection) bindCipher() error {
 
 func parseIPDiscovery(response []byte) (string, int, error) {
 	if len(response) < 74 {
-		return "", 0, fmt.Errorf("invalid ip discovery response")
+		return "", 0, fmt.Errorf("invalid IP discovery response: too short")
 	}
 
 	zero := bytes.IndexByte(response[8:len(response)-2], 0)
@@ -501,9 +759,14 @@ func parseIPDiscovery(response []byte) (string, int, error) {
 
 	addr, err := netip.ParseAddr(string(ipBytes))
 	if err != nil {
-		return "", 0, err
+		return "", 0, fmt.Errorf("failed to parse IP: %w", err)
 	}
 
 	port := int(binary.BigEndian.Uint16(response[len(response)-2:]))
 	return addr.String(), port, nil
+}
+
+// GetSilenceFrame returns the opus silence frame for ending audio streams.
+func GetSilenceFrame() []byte {
+	return silenceFrame
 }
