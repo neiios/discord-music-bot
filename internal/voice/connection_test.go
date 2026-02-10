@@ -1,15 +1,22 @@
 package voice
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+	"github.com/neiios/discord-music-bot/internal/gateway"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -662,4 +669,338 @@ func TestSendRTPPacket_ConcurrentSafe(t *testing.T) {
 	assert.Equal(t, uint16(totalPackets), conn.sequence)
 	assert.Equal(t, uint32(totalPackets*frameSize), conn.timestamp)
 	assert.Equal(t, uint32(totalPackets), conn.nonce)
+}
+
+// startMockUDPServer starts a UDP listener that handles IP discovery requests.
+// Returns the UDP connection (for cleanup) and its address (for the READY payload).
+func startMockUDPServer(t *testing.T) (*net.UDPConn, *net.UDPAddr) {
+	t.Helper()
+
+	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	udpConn, err := net.ListenUDP("udp", addr)
+	require.NoError(t, err)
+
+	go func() {
+		buf := make([]byte, 74)
+		_ = udpConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		n, remoteAddr, err := udpConn.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+		if n != 74 {
+			return
+		}
+
+		// Parse request: type 0x0001, length 70, SSRC at bytes 4-7
+		ssrc := binary.BigEndian.Uint32(buf[4:8])
+
+		// Build response: type 0x0002, length 70, echoed SSRC, IP at offset 8, port at bytes 72-73
+		resp := make([]byte, 74)
+		binary.BigEndian.PutUint16(resp[0:], 0x0002)
+		binary.BigEndian.PutUint16(resp[2:], 70)
+		binary.BigEndian.PutUint32(resp[4:], ssrc)
+		copy(resp[8:], "127.0.0.1")
+		localPort := udpConn.LocalAddr().(*net.UDPAddr).Port
+		binary.BigEndian.PutUint16(resp[72:], uint16(localPort))
+
+		_, _ = udpConn.WriteToUDP(resp, remoteAddr)
+	}()
+
+	return udpConn, udpConn.LocalAddr().(*net.UDPAddr)
+}
+
+type mockVoiceServer struct {
+	heartbeatInterval int
+	ssrc              uint32
+	udpIP             string
+	udpPort           int
+	mode              string
+	secretKey         []byte
+
+	// Seq values to send with READY and SESSION DESCRIPTION
+	readySeq   int
+	sessionSeq int
+
+	mu             sync.Mutex
+	receivedEvents []voiceEvent
+
+	identifyReceived chan voiceIdentify
+	selectReceived   chan selectProtocol
+	heartbeats       chan voiceHeartbeatPayload
+}
+
+func (m *mockVoiceServer) storeEvent(event voiceEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.receivedEvents = append(m.receivedEvents, event)
+}
+
+func (m *mockVoiceServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	wsConn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer wsConn.Close(websocket.StatusNormalClosure, "done")
+
+	ctx := r.Context()
+
+	// 1. Send HELLO (op 8)
+	hello := voiceHello{HeartbeatInterval: m.heartbeatInterval}
+	helloData, _ := json.Marshal(hello)
+	helloEvent := voiceEvent{Opcode: 8, Data: json.RawMessage(helloData)}
+	if err := wsjson.Write(ctx, wsConn, helloEvent); err != nil {
+		return
+	}
+
+	// 2. Read IDENTIFY (op 0)
+	var identifyEvent voiceEvent
+	if err := wsjson.Read(ctx, wsConn, &identifyEvent); err != nil {
+		return
+	}
+	m.storeEvent(identifyEvent)
+	var identify voiceIdentify
+	if err := json.Unmarshal(identifyEvent.Data, &identify); err != nil {
+		return
+	}
+	select {
+	case m.identifyReceived <- identify:
+	default:
+	}
+
+	// 3. Send READY (op 2) with seq
+	ready := voiceReady{
+		SSRC:  m.ssrc,
+		IP:    m.udpIP,
+		Port:  m.udpPort,
+		Modes: []string{m.mode},
+	}
+	readyData, _ := json.Marshal(ready)
+	readySeq := m.readySeq
+	readyEvent := voiceEvent{Opcode: 2, Data: json.RawMessage(readyData), Seq: &readySeq}
+	if err := wsjson.Write(ctx, wsConn, readyEvent); err != nil {
+		return
+	}
+
+	// 4. Read loop until SELECT PROTOCOL (op 1), handling interleaved heartbeats
+	for {
+		var event voiceEvent
+		if err := wsjson.Read(ctx, wsConn, &event); err != nil {
+			return
+		}
+		m.storeEvent(event)
+
+		switch event.Opcode {
+		case 3: // Heartbeat - send ACK (op 6)
+			ackEvent := voiceEvent{Opcode: 6, Data: event.Data}
+			if err := wsjson.Write(ctx, wsConn, ackEvent); err != nil {
+				return
+			}
+		case 1: // SELECT PROTOCOL
+			var sp selectProtocol
+			if err := json.Unmarshal(event.Data, &sp); err != nil {
+				return
+			}
+			select {
+			case m.selectReceived <- sp:
+			default:
+			}
+			goto sendSessionDesc
+		}
+	}
+
+sendSessionDesc:
+	// 5. Send SESSION DESCRIPTION (op 4) with seq
+	desc := sessionDescription{
+		Mode:      m.mode,
+		SecretKey: m.secretKey,
+	}
+	descData, _ := json.Marshal(desc)
+	sessionSeq := m.sessionSeq
+	descEvent := voiceEvent{Opcode: 4, Data: json.RawMessage(descData), Seq: &sessionSeq}
+	if err := wsjson.Write(ctx, wsConn, descEvent); err != nil {
+		return
+	}
+
+	// 6. Read loop: handle heartbeats, exit on error
+	for {
+		var event voiceEvent
+		if err := wsjson.Read(ctx, wsConn, &event); err != nil {
+			return
+		}
+		m.storeEvent(event)
+
+		if event.Opcode == 3 {
+			var hb voiceHeartbeatPayload
+			if err := json.Unmarshal(event.Data, &hb); err != nil {
+				return
+			}
+			select {
+			case m.heartbeats <- hb:
+			default:
+			}
+
+			// Send ACK (op 6)
+			ackEvent := voiceEvent{Opcode: 6, Data: event.Data}
+			if err := wsjson.Write(ctx, wsConn, ackEvent); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func TestVoiceConnectionFlow(t *testing.T) {
+	// Start mock UDP server
+	udpConn, udpAddr := startMockUDPServer(t)
+	defer udpConn.Close()
+
+	secretKey := make([]byte, 32)
+	for i := range secretKey {
+		secretKey[i] = byte(i)
+	}
+
+	mockServer := &mockVoiceServer{
+		heartbeatInterval: 100,
+		ssrc:              12345,
+		udpIP:             "127.0.0.1",
+		udpPort:           udpAddr.Port,
+		mode:              "aead_aes256_gcm_rtpsize",
+		secretKey:         secretKey,
+		readySeq:          1,
+		sessionSeq:        2,
+		identifyReceived:  make(chan voiceIdentify, 1),
+		selectReceived:    make(chan selectProtocol, 1),
+		heartbeats:        make(chan voiceHeartbeatPayload, 10),
+	}
+
+	server := httptest.NewServer(mockServer)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := Connect(ctx, ConnectionConfig{
+		UserID: "user123",
+		State: gateway.VoiceState{
+			GuildID:   "guild456",
+			ChannelID: "channel789",
+			SessionID: "session000",
+		},
+		Server: gateway.VoiceServerUpdate{
+			Token:    "voicetoken",
+			GuildID:  "guild456",
+			Endpoint: wsURL,
+		},
+		MainGateway: nil,
+	})
+	require.NoError(t, err)
+	defer conn.Close()
+
+	assert.True(t, conn.Ready)
+
+	// Verify IDENTIFY payload
+	select {
+	case identify := <-mockServer.identifyReceived:
+		assert.Equal(t, "guild456", identify.ServerID)
+		assert.Equal(t, "user123", identify.UserID)
+		assert.Equal(t, "session000", identify.SessionID)
+		assert.Equal(t, "voicetoken", identify.Token)
+		assert.False(t, identify.Video)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for IDENTIFY")
+	}
+
+	// Verify SELECT PROTOCOL payload
+	select {
+	case sp := <-mockServer.selectReceived:
+		assert.Equal(t, "udp", sp.Protocol)
+		assert.Equal(t, "127.0.0.1", sp.Data.Address)
+		assert.Equal(t, udpAddr.Port, sp.Data.Port)
+		assert.Equal(t, "aead_aes256_gcm_rtpsize", sp.Data.Mode)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SELECT PROTOCOL")
+	}
+
+	// Verify internal state
+	assert.Equal(t, uint32(12345), conn.ssrc)
+	assert.Equal(t, "aead_aes256_gcm_rtpsize", conn.mode)
+	assert.Equal(t, secretKey, conn.secretKey)
+	assert.NotNil(t, conn.aead)
+	assert.NotNil(t, conn.udpConn)
+
+	// Verify seq tracking: READY had seq 1, SESSION DESCRIPTION had seq 2
+	assert.Equal(t, int64(2), conn.seqAck.Load())
+
+	// Verify heartbeat v8 format
+	select {
+	case hb := <-mockServer.heartbeats:
+		assert.NotZero(t, hb.T)
+		assert.Equal(t, 2, hb.SeqAck)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for heartbeat")
+	}
+}
+
+func TestSeqAckTracking(t *testing.T) {
+	// Start mock UDP server
+	udpConn, udpAddr := startMockUDPServer(t)
+	defer udpConn.Close()
+
+	secretKey := make([]byte, 32)
+	for i := range secretKey {
+		secretKey[i] = byte(i)
+	}
+
+	mockServer := &mockVoiceServer{
+		heartbeatInterval: 100,
+		ssrc:              54321,
+		udpIP:             "127.0.0.1",
+		udpPort:           udpAddr.Port,
+		mode:              "aead_aes256_gcm_rtpsize",
+		secretKey:         secretKey,
+		readySeq:          5,
+		sessionSeq:        10,
+		identifyReceived:  make(chan voiceIdentify, 1),
+		selectReceived:    make(chan selectProtocol, 1),
+		heartbeats:        make(chan voiceHeartbeatPayload, 10),
+	}
+
+	server := httptest.NewServer(mockServer)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := Connect(ctx, ConnectionConfig{
+		UserID: "user999",
+		State: gateway.VoiceState{
+			GuildID:   "guild111",
+			ChannelID: "channel222",
+			SessionID: "session333",
+		},
+		Server: gateway.VoiceServerUpdate{
+			Token:    "token444",
+			GuildID:  "guild111",
+			Endpoint: wsURL,
+		},
+		MainGateway: nil,
+	})
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// After Connect: seqAck should be 10 (last seq from SESSION DESCRIPTION)
+	assert.Equal(t, int64(10), conn.seqAck.Load())
+
+	// First heartbeat should echo seq_ack: 10
+	select {
+	case hb := <-mockServer.heartbeats:
+		assert.NotZero(t, hb.T)
+		assert.Equal(t, 10, hb.SeqAck)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for heartbeat")
+	}
 }

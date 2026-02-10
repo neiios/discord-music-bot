@@ -145,7 +145,7 @@ type ConnectionConfig struct {
 // Connect establishes a new voice connection to Discord.
 func Connect(ctx context.Context, cfg ConnectionConfig) (*Connection, error) {
 	endpoint := cfg.Server.Endpoint
-	if !strings.HasPrefix(endpoint, "wss://") {
+	if !strings.HasPrefix(endpoint, "wss://") && !strings.HasPrefix(endpoint, "ws://") {
 		endpoint = "wss://" + endpoint
 	}
 	if !strings.Contains(endpoint, "?") {

@@ -181,7 +181,7 @@ func TestReadEvent(t *testing.T) {
 }
 
 func TestSendEvent(t *testing.T) {
-	var receivedEvent Event
+	eventReceived := make(chan Event, 1)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
@@ -192,7 +192,11 @@ func TestSendEvent(t *testing.T) {
 
 		ctx := r.Context()
 
-		wsjson.Read(ctx, conn, &receivedEvent)
+		var event Event
+		if err := wsjson.Read(ctx, conn, &event); err != nil {
+			return
+		}
+		eventReceived <- event
 	}))
 	defer server.Close()
 
@@ -219,10 +223,13 @@ func TestSendEvent(t *testing.T) {
 	err = conn.SendEvent(ctx, testEvent)
 	require.NoError(t, err)
 
-	time.Sleep(100 * time.Millisecond)
-
-	assert.Equal(t, 4, receivedEvent.Opcode)
-	require.NotNil(t, receivedEvent.Data)
+	select {
+	case receivedEvent := <-eventReceived:
+		assert.Equal(t, 4, receivedEvent.Opcode)
+		require.NotNil(t, receivedEvent.Data)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
 }
 
 func TestHeartbeat(t *testing.T) {
