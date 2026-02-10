@@ -2,14 +2,14 @@ package downloader
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-
-	"github.com/google/uuid"
 )
 
 func DownloadSong(metadata Metadata) (Song, error) {
@@ -37,7 +37,7 @@ func DownloadSong(metadata Metadata) (Song, error) {
 	}
 
 	song := Song{
-		ID:       uuid.NewString(),
+		ID:       newID(),
 		Metadata: metadata,
 		Audio:    audio,
 	}
@@ -76,4 +76,10 @@ type Metadata struct {
 	Title       string  `json:"title"`
 	DurationSec int     `json:"duration"`
 	URL         url.URL `json:"-"`
+}
+
+func newID() string {
+	var b [16]byte
+	rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }

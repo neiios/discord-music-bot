@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/neiios/discord-music-bot/internal/downloader"
-	"github.com/stretchr/testify/require"
 )
 
 func TestExtractOpusPacketsE2E(t *testing.T) {
@@ -17,14 +16,26 @@ func TestExtractOpusPacketsE2E(t *testing.T) {
 	}
 
 	song, err := downloader.DownloadSong(metadata)
-	require.NoError(t, err)
-	require.Equal(t, metadata, song.Metadata)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if song.Metadata != metadata {
+		t.Fatalf("got metadata %v, want %v", song.Metadata, metadata)
+	}
 
 	packets, err := ExtractOpusPackets(song.Audio)
-	require.NoError(t, err)
-	require.NotEmpty(t, packets)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(packets) == 0 {
+		t.Fatalf("expected non-empty packets")
+	}
 
 	expectedMinPackets := metadata.DurationSec * 40 // ~20ms frames => ~50 fps; allow slack
-	require.GreaterOrEqual(t, len(packets), expectedMinPackets)
-	require.Greater(t, len(packets[0]), 0)
+	if len(packets) < expectedMinPackets {
+		t.Fatalf("got %d packets, want >= %d", len(packets), expectedMinPackets)
+	}
+	if len(packets[0]) <= 0 {
+		t.Fatalf("expected first packet length > 0, got %d", len(packets[0]))
+	}
 }
