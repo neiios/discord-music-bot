@@ -5,3 +5,6 @@
 !/go.mod
 !/go.sum
 !/LICENSE
+!/ARCH.md
+!/README.md
+!/.env.example
