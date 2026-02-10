@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
+	"encoding/json"
 	"net"
 	"sync"
 	"testing"
@@ -554,6 +555,58 @@ func TestSendRTPPacket_IncrementCounters(t *testing.T) {
 	assert.Equal(t, uint16(103), conn.sequence)
 	assert.Equal(t, uint32(1000+3*frameSize), conn.timestamp)
 	assert.Equal(t, uint32(53), conn.nonce)
+}
+
+func TestVoiceHeartbeatPayloadSerialization(t *testing.T) {
+	payload := voiceHeartbeatPayload{T: 1501184119561, SeqAck: 10}
+	data, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	err = json.Unmarshal(data, &parsed)
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(1501184119561), parsed["t"])
+	assert.Equal(t, float64(10), parsed["seq_ack"])
+
+	// Verify it matches the v8 format: {"t": <nonce>, "seq_ack": <seq>}
+	assert.Len(t, parsed, 2)
+
+	// Verify negative seq_ack (initial state) serializes correctly
+	payload = voiceHeartbeatPayload{T: 42, SeqAck: -1}
+	data, err = json.Marshal(payload)
+	require.NoError(t, err)
+
+	err = json.Unmarshal(data, &parsed)
+	require.NoError(t, err)
+	assert.Equal(t, float64(-1), parsed["seq_ack"])
+}
+
+func TestVoiceEventSeqDeserialization(t *testing.T) {
+	t.Run("parses seq field", func(t *testing.T) {
+		raw := `{"op": 6, "d": null, "seq": 5}`
+		var event voiceEvent
+		err := json.Unmarshal([]byte(raw), &event)
+		require.NoError(t, err)
+		require.NotNil(t, event.Seq)
+		assert.Equal(t, 5, *event.Seq)
+	})
+
+	t.Run("does not parse s field", func(t *testing.T) {
+		raw := `{"op": 6, "d": null, "s": 5}`
+		var event voiceEvent
+		err := json.Unmarshal([]byte(raw), &event)
+		require.NoError(t, err)
+		assert.Nil(t, event.Seq)
+	})
+
+	t.Run("seq omitted", func(t *testing.T) {
+		raw := `{"op": 6, "d": null}`
+		var event voiceEvent
+		err := json.Unmarshal([]byte(raw), &event)
+		require.NoError(t, err)
+		assert.Nil(t, event.Seq)
+	})
 }
 
 func TestSendRTPPacket_ConcurrentSafe(t *testing.T) {

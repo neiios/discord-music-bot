@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -33,8 +34,13 @@ var silenceFrame = []byte{0xF8, 0xFF, 0xFE}
 type voiceEvent struct {
 	Opcode int             `json:"op"`
 	Data   json.RawMessage `json:"d"`
-	Seq    *int            `json:"s,omitempty"`
+	Seq    *int            `json:"seq,omitempty"`
 	Type   *string         `json:"t,omitempty"`
+}
+
+type voiceHeartbeatPayload struct {
+	T      int64 `json:"t"`
+	SeqAck int   `json:"seq_ack"`
 }
 
 type voiceHello struct {
@@ -106,6 +112,9 @@ type Connection struct {
 	timestamp uint32
 	nonce     uint32
 
+	// Sequence tracking for v8 heartbeats
+	seqAck atomic.Int64
+
 	// State flags
 	speaking     bool
 	reconnecting bool
@@ -163,6 +172,7 @@ func Connect(ctx context.Context, cfg ConnectionConfig) (*Connection, error) {
 		close:       make(chan struct{}),
 		OpusSend:    make(chan []byte, 2),
 	}
+	c.seqAck.Store(-1)
 
 	if err := c.establish(ctx, cfg.State, cfg.Server); err != nil {
 		c.Close()
@@ -442,7 +452,8 @@ func (c *Connection) wsHeartbeat(interval time.Duration) {
 			return
 		case <-ticker.C:
 			nonce++
-			if err := c.sendEvent(context.Background(), 3, nonce); err != nil {
+			payload := voiceHeartbeatPayload{T: nonce, SeqAck: int(c.seqAck.Load())}
+			if err := c.sendEvent(context.Background(), 3, payload); err != nil {
 				slog.Error("voice heartbeat failed", "error", err)
 				go c.reconnect()
 				return
@@ -684,6 +695,9 @@ func (c *Connection) readEvent(ctx context.Context) (voiceEvent, error) {
 	var event voiceEvent
 	if err := wsjson.Read(ctx, c.wsConn, &event); err != nil {
 		return voiceEvent{}, err
+	}
+	if event.Seq != nil {
+		c.seqAck.Store(int64(*event.Seq))
 	}
 	return event, nil
 }
