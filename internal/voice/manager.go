@@ -107,6 +107,7 @@ func (m *Manager) HandleQueue() {
 	for i, song := range upcoming {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, song.Metadata.Title)
 	}
+	fmt.Fprint(&b, "\n")
 
 	m.sendFeedback(b.String())
 }
@@ -353,7 +354,7 @@ func (m *Manager) downloadAndQueue(ctx context.Context, rawURL url.URL) {
 	entries, err := downloader.GetPlaylistEntries(ctx, rawURL)
 	if err != nil {
 		slog.Error("failed to get playlist entries", "error", err, "url", rawURL)
-		m.sendFeedback(fmt.Sprintf("**Error** Failed to get metadata for `%s`", rawURL.String()))
+		m.sendFeedback(fmt.Sprintf("**Failed to get metadata:** `%s`", rawURL.String()))
 		return
 	}
 
@@ -361,7 +362,7 @@ func (m *Manager) downloadAndQueue(ctx context.Context, rawURL url.URL) {
 		metadata, err := entries[0].ToMetadata()
 		if err != nil {
 			slog.Error("failed to convert playlist entry to metadata", "error", err)
-			m.sendFeedback(fmt.Sprintf("**Error** Failed to get metadata for `%s`", rawURL.String()))
+			m.sendFeedback(fmt.Sprintf("**Failed to get metadata:** `%s`", rawURL.String()))
 			return
 		}
 		m.downloadSingle(ctx, metadata)
@@ -379,14 +380,14 @@ func (m *Manager) downloadSingle(ctx context.Context, metadata downloader.Metada
 
 	if metadata.DurationSec > 3*60*60 {
 		slog.Error("song too long", "duration", metadata.DurationSec, "title", metadata.Title)
-		m.sendFeedback(fmt.Sprintf("**Error** Song too long (>3h) - %s", metadata.Title))
+		m.sendFeedback(fmt.Sprintf("**Song too long:** (>3h) - %s", metadata.Title))
 		return
 	}
 
 	song, err := downloader.DownloadSong(loaderCtx, metadata)
 	if err != nil {
 		slog.Error("failed to download song", "error", err, "title", metadata.Title)
-		m.sendFeedback(fmt.Sprintf("**Error** Failed to download - %s", metadata.Title))
+		m.sendFeedback(fmt.Sprintf("**Failed to download:** %s", metadata.Title))
 		return
 	}
 
@@ -403,7 +404,7 @@ func (m *Manager) downloadSingle(ctx context.Context, metadata downloader.Metada
 	m.mu.Unlock()
 
 	if pos > 1 || playing {
-		m.sendFeedback(fmt.Sprintf("**Queued** %s - position #%d", song.Metadata.Title, pos))
+		m.sendFeedback(fmt.Sprintf("**Queued:** %s - position #%d", song.Metadata.Title, pos))
 	}
 
 	slog.Info("queued song for playback", "title", song.Metadata.Title, "position", pos)
