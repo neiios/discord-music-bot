@@ -6,7 +6,7 @@ Downloads audio via `yt-dlp` and streams Opus-encoded audio over UDP.
 
 ## Requirements
 
-- Go 1.25
+- Go 1.26
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - [FFmpeg](https://ffmpeg.org/)
 
@@ -40,6 +40,9 @@ Send these in the configured music channel:
 
 - `/connect` or `/come` -- join the voice channel
 - `/play <url>` -- enqueue and play audio from a URL
+- `/skip` -- skip the current song
+- `/stop` -- stop playback and clear the queue
+- `/queue` -- show now playing and upcoming songs
 
 ## Architecture
 

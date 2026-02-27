@@ -155,7 +155,7 @@ flowchart LR
     url["URL from<br/>/play command"]
     meta["GetSongMetadata()<br/>yt-dlp --dump-json"]
     download["DownloadSong()<br/>yt-dlp --extract-audio<br/>--audio-format opus"]
-    queue["playQueue<br/>(chan Song, cap 3)"]
+    queue["Queue struct<br/>(slice-backed, signal channels)"]
     extract["ExtractOpusPackets()<br/>Parse Ogg container"]
     send["OpusSend channel<br/>(chan []byte)"]
     rtp["sendRTPPacket()<br/>Encrypt + RTP header"]
