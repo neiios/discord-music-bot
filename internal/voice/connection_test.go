@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/neiios/discord-music-bot/internal/assert"
 	"github.com/neiios/discord-music-bot/internal/gateway"
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -51,9 +52,7 @@ func TestChooseMode(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			result := chooseMode(tc.modes)
-			if result != tc.expected {
-				t.Errorf("chooseMode(%v) = %q, want %q", tc.modes, result, tc.expected)
-			}
+			assert.Equal(t, result, tc.expected)
 		})
 	}
 }
@@ -71,23 +70,15 @@ func TestParseIPDiscovery(t *testing.T) {
 		binary.BigEndian.PutUint16(response[72:], 12345)
 
 		parsedIP, parsedPort, err := parseIPDiscovery(response)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if parsedIP != "203.0.113.42" {
-			t.Errorf("IP = %q, want %q", parsedIP, "203.0.113.42")
-		}
-		if parsedPort != 12345 {
-			t.Errorf("port = %d, want %d", parsedPort, 12345)
-		}
+		assert.NoErrf(t, err)
+		assert.Equal(t, parsedIP, "203.0.113.42")
+		assert.Equal(t, parsedPort, 12345)
 	})
 
 	t.Run("invalid response too short", func(t *testing.T) {
 		response := make([]byte, 10)
 		_, _, err := parseIPDiscovery(response)
-		if err == nil {
-			t.Errorf("expected error, got nil")
-		}
+		assert.IsErr(t, err)
 	})
 }
 
@@ -103,19 +94,13 @@ func TestBindCipher_AES(t *testing.T) {
 	}
 
 	err := conn.bindCipher()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if conn.aead == nil {
-		t.Fatalf("expected non-nil aead")
-	}
+	assert.NoErrf(t, err)
+	assert.NotNilf(t, conn.aead)
 
 	nonce := make([]byte, conn.aead.NonceSize())
 	plaintext := []byte("test data")
 	ciphertext := conn.aead.Seal(nil, nonce, plaintext, nil)
-	if len(ciphertext) <= len(plaintext) {
-		t.Errorf("ciphertext length %d should be > plaintext length %d", len(ciphertext), len(plaintext))
-	}
+	assert.Greater(t, len(ciphertext), len(plaintext))
 }
 
 func TestBindCipher_ChaCha(t *testing.T) {
@@ -130,19 +115,13 @@ func TestBindCipher_ChaCha(t *testing.T) {
 	}
 
 	err := conn.bindCipher()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if conn.aead == nil {
-		t.Fatalf("expected non-nil aead")
-	}
+	assert.NoErrf(t, err)
+	assert.NotNilf(t, conn.aead)
 
 	nonce := make([]byte, conn.aead.NonceSize())
 	plaintext := []byte("test data")
 	ciphertext := conn.aead.Seal(nil, nonce, plaintext, nil)
-	if len(ciphertext) <= len(plaintext) {
-		t.Errorf("ciphertext length %d should be > plaintext length %d", len(ciphertext), len(plaintext))
-	}
+	assert.Greater(t, len(ciphertext), len(plaintext))
 }
 
 func TestBindCipher_UnsupportedMode(t *testing.T) {
@@ -152,12 +131,7 @@ func TestBindCipher_UnsupportedMode(t *testing.T) {
 	}
 
 	err := conn.bindCipher()
-	if err == nil {
-		t.Errorf("expected error, got nil")
-	}
-	if err != nil && !strings.Contains(err.Error(), "unsupported encryption mode") {
-		t.Errorf("error %q should contain %q", err.Error(), "unsupported encryption mode")
-	}
+	assert.ErrContains(t, err, "unsupported encryption mode")
 }
 
 func TestBindCipher_MissingKey(t *testing.T) {
@@ -167,9 +141,7 @@ func TestBindCipher_MissingKey(t *testing.T) {
 	}
 
 	err := conn.bindCipher()
-	if err == nil {
-		t.Errorf("expected error, got nil")
-	}
+	assert.IsErr(t, err)
 }
 
 func TestSendRTPPacket(t *testing.T) {
@@ -179,28 +151,18 @@ func TestSendRTPPacket(t *testing.T) {
 	}
 
 	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	listener, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer listener.Close()
 
 	udpConn, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer udpConn.Close()
 
 	conn := &Connection{
@@ -214,42 +176,22 @@ func TestSendRTPPacket(t *testing.T) {
 
 	opusPayload := []byte{0xFC, 0xFF, 0xFE}
 	err = conn.sendRTPPacket(opusPayload)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
 	buf := make([]byte, 1024)
 	listener.SetReadDeadline(time.Now().Add(1 * time.Second))
 	n, err := listener.Read(buf)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n <= 12 {
-		t.Errorf("packet size %d should be > 12", n)
-	}
+	assert.NoErrf(t, err)
+	assert.Greater(t, n, 12)
 
-	if buf[0] != 0x80 {
-		t.Errorf("buf[0] = 0x%02X, want 0x80", buf[0])
-	}
-	if buf[1] != byte(payloadTypeOpus) {
-		t.Errorf("buf[1] = 0x%02X, want 0x%02X", buf[1], byte(payloadTypeOpus))
-	}
-	if got := binary.BigEndian.Uint16(buf[2:4]); got != 100 {
-		t.Errorf("sequence = %d, want 100", got)
-	}
-	if got := binary.BigEndian.Uint32(buf[4:8]); got != 1000 {
-		t.Errorf("timestamp = %d, want 1000", got)
-	}
-	if got := binary.BigEndian.Uint32(buf[8:12]); got != 12345 {
-		t.Errorf("ssrc = %d, want 12345", got)
-	}
+	assert.Equal(t, buf[0], byte(0x80))
+	assert.Equal(t, buf[1], byte(payloadTypeOpus))
+	assert.Equal(t, binary.BigEndian.Uint16(buf[2:4]), uint16(100))
+	assert.Equal(t, binary.BigEndian.Uint32(buf[4:8]), uint32(1000))
+	assert.Equal(t, binary.BigEndian.Uint32(buf[8:12]), uint32(12345))
 
-	if conn.sequence != 101 {
-		t.Errorf("sequence = %d, want 101", conn.sequence)
-	}
-	if conn.timestamp != 1960 {
-		t.Errorf("timestamp = %d, want 1960", conn.timestamp)
-	}
+	assert.Equal(t, conn.sequence, uint16(101))
+	assert.Equal(t, conn.timestamp, uint32(1960))
 }
 
 func TestWaitUntilConnected(t *testing.T) {
@@ -259,9 +201,7 @@ func TestWaitUntilConnected(t *testing.T) {
 		}
 
 		err := conn.WaitUntilConnected(1 * time.Second)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assert.NoErr(t, err)
 	})
 
 	t.Run("times out when not ready", func(t *testing.T) {
@@ -273,15 +213,8 @@ func TestWaitUntilConnected(t *testing.T) {
 		err := conn.WaitUntilConnected(300 * time.Millisecond)
 		elapsed := time.Since(start)
 
-		if err == nil {
-			t.Errorf("expected error, got nil")
-		}
-		if err != nil && !strings.Contains(err.Error(), "timeout") {
-			t.Errorf("error %q should contain %q", err.Error(), "timeout")
-		}
-		if elapsed < 300*time.Millisecond {
-			t.Errorf("elapsed %v should be >= 300ms", elapsed)
-		}
+		assert.ErrContains(t, err, "timeout")
+		assert.GreaterOrEqual(t, elapsed, 300*time.Millisecond)
 	})
 
 	t.Run("returns when becomes ready", func(t *testing.T) {
@@ -300,31 +233,21 @@ func TestWaitUntilConnected(t *testing.T) {
 		err := conn.WaitUntilConnected(1 * time.Second)
 		elapsed := time.Since(start)
 
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		if elapsed >= 500*time.Millisecond {
-			t.Errorf("elapsed %v should be < 500ms", elapsed)
-		}
+		assert.NoErr(t, err)
+		assert.Less(t, elapsed, 500*time.Millisecond)
 	})
 }
 
 func TestClose(t *testing.T) {
 	t.Run("closes all resources", func(t *testing.T) {
 		addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		assert.NoErrf(t, err)
 		listener, err := net.ListenUDP("udp", addr)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		assert.NoErrf(t, err)
 		defer listener.Close()
 
 		udpConn, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		assert.NoErrf(t, err)
 
 		closeChan := make(chan struct{})
 		conn := &Connection{
@@ -336,21 +259,10 @@ func TestClose(t *testing.T) {
 
 		conn.Close()
 
-		if conn.Ready {
-			t.Errorf("expected Ready to be false")
-		}
-		if conn.speaking {
-			t.Errorf("expected speaking to be false")
-		}
-		if conn.udpConn != nil {
-			t.Errorf("expected udpConn to be nil")
-		}
-
-		select {
-		case <-closeChan:
-		default:
-			t.Error("close channel should be closed")
-		}
+		assert.False(t, conn.Ready)
+		assert.False(t, conn.speaking)
+		assert.Nil(t, conn.udpConn)
+		assert.ChanClosed(t, closeChan)
 	})
 
 	t.Run("handles double close gracefully", func(t *testing.T) {
@@ -363,9 +275,7 @@ func TestClose(t *testing.T) {
 		conn.Close()
 		conn.Close()
 
-		if conn.Ready {
-			t.Errorf("expected Ready to be false")
-		}
+		assert.False(t, conn.Ready)
 	})
 }
 
@@ -376,12 +286,7 @@ func TestSpeaking(t *testing.T) {
 		}
 
 		err := conn.Speaking(true)
-		if err == nil {
-			t.Errorf("expected error, got nil")
-		}
-		if err != nil && !strings.Contains(err.Error(), "no voice websocket") {
-			t.Errorf("error %q should contain %q", err.Error(), "no voice websocket")
-		}
+		assert.ErrContains(t, err, "no voice websocket")
 	})
 }
 
@@ -392,28 +297,18 @@ func TestOpusSender_ReceivesFromChannel(t *testing.T) {
 	}
 
 	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	listener, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer listener.Close()
 
 	udpConn, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer udpConn.Close()
 
 	closeChan := make(chan struct{})
@@ -438,19 +333,11 @@ func TestOpusSender_ReceivesFromChannel(t *testing.T) {
 	buf := make([]byte, 1024)
 	listener.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	n, err := listener.Read(buf)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n <= 12 {
-		t.Errorf("packet size %d should be > 12", n)
-	}
+	assert.NoErrf(t, err)
+	assert.Greater(t, n, 12)
 
-	if buf[0] != 0x80 {
-		t.Errorf("buf[0] = 0x%02X, want 0x80", buf[0])
-	}
-	if buf[1] != byte(payloadTypeOpus) {
-		t.Errorf("buf[1] = 0x%02X, want 0x%02X", buf[1], byte(payloadTypeOpus))
-	}
+	assert.Equal(t, buf[0], byte(0x80))
+	assert.Equal(t, buf[1], byte(payloadTypeOpus))
 
 	close(closeChan)
 }
@@ -462,28 +349,18 @@ func TestOpusSender_StopsOnClose(t *testing.T) {
 	}
 
 	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	listener, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer listener.Close()
 
 	udpConn, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer udpConn.Close()
 
 	closeChan := make(chan struct{})
@@ -507,34 +384,24 @@ func TestOpusSender_StopsOnClose(t *testing.T) {
 
 	close(closeChan)
 
-	done := make(chan struct{})
+	done := make(chan struct{}, 1)
 	go func() {
 		wg.Wait()
-		close(done)
+		done <- struct{}{}
 	}()
 
-	select {
-	case <-done:
-	case <-time.After(500 * time.Millisecond):
-		t.Error("opusSender did not stop after close signal")
-	}
+	assert.Recv(t, done, 500*time.Millisecond)
 }
 
 func TestUDPKeepAlive_SendsPackets(t *testing.T) {
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	listener, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer listener.Close()
 
 	udpConn, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer udpConn.Close()
 
 	closeChan := make(chan struct{})
@@ -554,30 +421,19 @@ func TestUDPKeepAlive_SendsPackets(t *testing.T) {
 
 	close(closeChan)
 
-	done := make(chan struct{})
+	done := make(chan struct{}, 1)
 	go func() {
 		wg.Wait()
-		close(done)
+		done <- struct{}{}
 	}()
 
-	select {
-	case <-done:
-	case <-time.After(6 * time.Second):
-		t.Error("udpKeepAlive did not stop after close signal")
-	}
+	assert.Recv(t, done, 6*time.Second)
 }
 
 func TestGetSilenceFrame(t *testing.T) {
 	frame := GetSilenceFrame()
 	expected := []byte{0xF8, 0xFF, 0xFE}
-	if len(frame) != len(expected) {
-		t.Fatalf("frame length = %d, want %d", len(frame), len(expected))
-	}
-	for i := range expected {
-		if frame[i] != expected[i] {
-			t.Errorf("frame[%d] = 0x%02X, want 0x%02X", i, frame[i], expected[i])
-		}
-	}
+	assert.SlicesEqual(t, frame, expected)
 }
 
 func TestConnectionConfig(t *testing.T) {
@@ -613,15 +469,9 @@ func TestConnectionConfig(t *testing.T) {
 		MainGateway: nil,
 	}
 
-	if cfg.UserID != "123456" {
-		t.Errorf("UserID = %q, want %q", cfg.UserID, "123456")
-	}
-	if cfg.State.GuildID != "guild123" {
-		t.Errorf("State.GuildID = %q, want %q", cfg.State.GuildID, "guild123")
-	}
-	if cfg.Server.Token != "token123" {
-		t.Errorf("Server.Token = %q, want %q", cfg.Server.Token, "token123")
-	}
+	assert.Equal(t, cfg.UserID, "123456")
+	assert.Equal(t, cfg.State.GuildID, "guild123")
+	assert.Equal(t, cfg.Server.Token, "token123")
 }
 
 func TestSendRTPPacket_NotReady(t *testing.T) {
@@ -631,12 +481,7 @@ func TestSendRTPPacket_NotReady(t *testing.T) {
 	}
 
 	err := conn.sendRTPPacket([]byte{0xFC, 0xFF, 0xFE})
-	if err == nil {
-		t.Errorf("expected error, got nil")
-	}
-	if err != nil && !strings.Contains(err.Error(), "not ready") {
-		t.Errorf("error %q should contain %q", err.Error(), "not ready")
-	}
+	assert.ErrContains(t, err, "not ready")
 }
 
 func TestSendRTPPacket_IncrementCounters(t *testing.T) {
@@ -646,28 +491,18 @@ func TestSendRTPPacket_IncrementCounters(t *testing.T) {
 	}
 
 	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	listener, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer listener.Close()
 
 	udpConn, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer udpConn.Close()
 
 	conn := &Connection{
@@ -681,59 +516,34 @@ func TestSendRTPPacket_IncrementCounters(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		err := conn.sendRTPPacket([]byte{0xFC, 0xFF, 0xFE})
-		if err != nil {
-			t.Fatalf("unexpected error on packet %d: %v", i, err)
-		}
+		assert.NoErrf(t, err)
 	}
 
-	if conn.sequence != 103 {
-		t.Errorf("sequence = %d, want 103", conn.sequence)
-	}
-	if conn.timestamp != 1000+3*frameSize {
-		t.Errorf("timestamp = %d, want %d", conn.timestamp, 1000+3*frameSize)
-	}
-	if conn.nonce != 53 {
-		t.Errorf("nonce = %d, want 53", conn.nonce)
-	}
+	assert.Equal(t, conn.sequence, uint16(103))
+	assert.Equal(t, conn.timestamp, uint32(1000+3*frameSize))
+	assert.Equal(t, conn.nonce, uint32(53))
 }
 
 func TestVoiceHeartbeatPayloadSerialization(t *testing.T) {
 	payload := voiceHeartbeatPayload{T: 1501184119561, SeqAck: 10}
 	data, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
 	var parsed map[string]any
 	err = json.Unmarshal(data, &parsed)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
-	if parsed["t"] != float64(1501184119561) {
-		t.Errorf("t = %v, want %v", parsed["t"], float64(1501184119561))
-	}
-	if parsed["seq_ack"] != float64(10) {
-		t.Errorf("seq_ack = %v, want %v", parsed["seq_ack"], float64(10))
-	}
-
-	if len(parsed) != 2 {
-		t.Errorf("parsed map length = %d, want 2", len(parsed))
-	}
+	assert.Equal(t, parsed["t"], any(float64(1501184119561)))
+	assert.Equal(t, parsed["seq_ack"], any(float64(10)))
+	assert.Equal(t, len(parsed), 2)
 
 	payload = voiceHeartbeatPayload{T: 42, SeqAck: -1}
 	data, err = json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
 	err = json.Unmarshal(data, &parsed)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if parsed["seq_ack"] != float64(-1) {
-		t.Errorf("seq_ack = %v, want %v", parsed["seq_ack"], float64(-1))
-	}
+	assert.NoErrf(t, err)
+	assert.Equal(t, parsed["seq_ack"], any(float64(-1)))
 }
 
 func TestVoiceEventSeqDeserialization(t *testing.T) {
@@ -741,39 +551,24 @@ func TestVoiceEventSeqDeserialization(t *testing.T) {
 		raw := `{"op": 6, "d": null, "seq": 5}`
 		var event voiceEvent
 		err := json.Unmarshal([]byte(raw), &event)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if event.Seq == nil {
-			t.Fatalf("expected non-nil Seq")
-		}
-		if *event.Seq != 5 {
-			t.Errorf("Seq = %d, want 5", *event.Seq)
-		}
+		assert.NoErrf(t, err)
+		assert.DerefEqual(t, event.Seq, 5)
 	})
 
 	t.Run("does not parse s field", func(t *testing.T) {
 		raw := `{"op": 6, "d": null, "s": 5}`
 		var event voiceEvent
 		err := json.Unmarshal([]byte(raw), &event)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if event.Seq != nil {
-			t.Errorf("expected nil Seq, got %d", *event.Seq)
-		}
+		assert.NoErrf(t, err)
+		assert.Nil(t, event.Seq)
 	})
 
 	t.Run("seq omitted", func(t *testing.T) {
 		raw := `{"op": 6, "d": null}`
 		var event voiceEvent
 		err := json.Unmarshal([]byte(raw), &event)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if event.Seq != nil {
-			t.Errorf("expected nil Seq, got %d", *event.Seq)
-		}
+		assert.NoErrf(t, err)
+		assert.Nil(t, event.Seq)
 	})
 }
 
@@ -784,28 +579,18 @@ func TestSendRTPPacket_ConcurrentSafe(t *testing.T) {
 	}
 
 	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	listener, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer listener.Close()
 
 	udpConn, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer udpConn.Close()
 
 	conn := &Connection{
@@ -827,9 +612,7 @@ func TestSendRTPPacket_ConcurrentSafe(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < packetsPerGoroutine; j++ {
 				err := conn.sendRTPPacket([]byte{0xFC, 0xFF, 0xFE})
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
+				assert.NoErr(t, err)
 			}
 		}()
 	}
@@ -837,28 +620,18 @@ func TestSendRTPPacket_ConcurrentSafe(t *testing.T) {
 	wg.Wait()
 
 	totalPackets := numGoroutines * packetsPerGoroutine
-	if conn.sequence != uint16(totalPackets) {
-		t.Errorf("sequence = %d, want %d", conn.sequence, totalPackets)
-	}
-	if conn.timestamp != uint32(totalPackets*frameSize) {
-		t.Errorf("timestamp = %d, want %d", conn.timestamp, totalPackets*frameSize)
-	}
-	if conn.nonce != uint32(totalPackets) {
-		t.Errorf("nonce = %d, want %d", conn.nonce, totalPackets)
-	}
+	assert.Equal(t, conn.sequence, uint16(totalPackets))
+	assert.Equal(t, conn.timestamp, uint32(totalPackets*frameSize))
+	assert.Equal(t, conn.nonce, uint32(totalPackets))
 }
 
 func startMockUDPServer(t *testing.T) (*net.UDPConn, *net.UDPAddr) {
 	t.Helper()
 
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	udpConn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
 	go func() {
 		buf := make([]byte, 74)
@@ -1063,85 +836,35 @@ func TestVoiceConnectionFlow(t *testing.T) {
 		},
 		MainGateway: nil,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer conn.Close()
 
-	if !conn.Ready {
-		t.Errorf("expected Ready to be true")
-	}
+	assert.True(t, conn.Ready)
 
-	select {
-	case identify := <-mockServer.identifyReceived:
-		if identify.ServerID != "guild456" {
-			t.Errorf("ServerID = %q, want %q", identify.ServerID, "guild456")
-		}
-		if identify.UserID != "user123" {
-			t.Errorf("UserID = %q, want %q", identify.UserID, "user123")
-		}
-		if identify.SessionID != "session000" {
-			t.Errorf("SessionID = %q, want %q", identify.SessionID, "session000")
-		}
-		if identify.Token != "voicetoken" {
-			t.Errorf("Token = %q, want %q", identify.Token, "voicetoken")
-		}
-		if identify.Video {
-			t.Errorf("expected Video to be false")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for IDENTIFY")
-	}
+	identify := assert.Recv(t, mockServer.identifyReceived, 2*time.Second)
+	assert.Equal(t, identify.ServerID, "guild456")
+	assert.Equal(t, identify.UserID, "user123")
+	assert.Equal(t, identify.SessionID, "session000")
+	assert.Equal(t, identify.Token, "voicetoken")
+	assert.False(t, identify.Video)
 
-	select {
-	case sp := <-mockServer.selectReceived:
-		if sp.Protocol != "udp" {
-			t.Errorf("Protocol = %q, want %q", sp.Protocol, "udp")
-		}
-		if sp.Data.Address != "127.0.0.1" {
-			t.Errorf("Address = %q, want %q", sp.Data.Address, "127.0.0.1")
-		}
-		if sp.Data.Port != udpAddr.Port {
-			t.Errorf("Port = %d, want %d", sp.Data.Port, udpAddr.Port)
-		}
-		if sp.Data.Mode != "aead_aes256_gcm_rtpsize" {
-			t.Errorf("Mode = %q, want %q", sp.Data.Mode, "aead_aes256_gcm_rtpsize")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for SELECT PROTOCOL")
-	}
+	sp := assert.Recv(t, mockServer.selectReceived, 2*time.Second)
+	assert.Equal(t, sp.Protocol, "udp")
+	assert.Equal(t, sp.Data.Address, "127.0.0.1")
+	assert.Equal(t, sp.Data.Port, udpAddr.Port)
+	assert.Equal(t, sp.Data.Mode, "aead_aes256_gcm_rtpsize")
 
-	if conn.ssrc != 12345 {
-		t.Errorf("ssrc = %d, want 12345", conn.ssrc)
-	}
-	if conn.mode != "aead_aes256_gcm_rtpsize" {
-		t.Errorf("mode = %q, want %q", conn.mode, "aead_aes256_gcm_rtpsize")
-	}
-	if string(conn.secretKey) != string(secretKey) {
-		t.Errorf("secretKey mismatch")
-	}
-	if conn.aead == nil {
-		t.Errorf("expected non-nil aead")
-	}
-	if conn.udpConn == nil {
-		t.Errorf("expected non-nil udpConn")
-	}
+	assert.Equal(t, conn.ssrc, uint32(12345))
+	assert.Equal(t, conn.mode, "aead_aes256_gcm_rtpsize")
+	assert.SlicesEqual(t, conn.secretKey, secretKey)
+	assert.NotNil(t, conn.aead)
+	assert.NotNil(t, conn.udpConn)
 
-	if conn.seqAck.Load() != 2 {
-		t.Errorf("seqAck = %d, want 2", conn.seqAck.Load())
-	}
+	assert.Equal(t, conn.seqAck.Load(), int64(2))
 
-	select {
-	case hb := <-mockServer.heartbeats:
-		if hb.T == 0 {
-			t.Errorf("expected non-zero T")
-		}
-		if hb.SeqAck != 2 {
-			t.Errorf("SeqAck = %d, want 2", hb.SeqAck)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("timed out waiting for heartbeat")
-	}
+	hb := assert.Recv(t, mockServer.heartbeats, 500*time.Millisecond)
+	assert.True(t, hb.T != 0, "expected non-zero T")
+	assert.Equal(t, hb.SeqAck, 2)
 }
 
 func TestSeqAckTracking(t *testing.T) {
@@ -1189,24 +912,12 @@ func TestSeqAckTracking(t *testing.T) {
 		},
 		MainGateway: nil,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer conn.Close()
 
-	if conn.seqAck.Load() != 10 {
-		t.Errorf("seqAck = %d, want 10", conn.seqAck.Load())
-	}
+	assert.Equal(t, conn.seqAck.Load(), int64(10))
 
-	select {
-	case hb := <-mockServer.heartbeats:
-		if hb.T == 0 {
-			t.Errorf("expected non-zero T")
-		}
-		if hb.SeqAck != 10 {
-			t.Errorf("SeqAck = %d, want 10", hb.SeqAck)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("timed out waiting for heartbeat")
-	}
+	hb := assert.Recv(t, mockServer.heartbeats, 500*time.Millisecond)
+	assert.True(t, hb.T != 0, "expected non-zero T")
+	assert.Equal(t, hb.SeqAck, 10)
 }

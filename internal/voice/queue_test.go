@@ -4,6 +4,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/neiios/discord-music-bot/internal/assert"
 	"github.com/neiios/discord-music-bot/internal/downloader"
 )
 
@@ -21,35 +22,23 @@ func TestAddPopFIFO(t *testing.T) {
 	titles := []string{"A", "B", "C"}
 	for _, want := range titles {
 		got, ok := q.Pop()
-		if !ok {
-			t.Fatalf("expected song %q, got empty queue", want)
-		}
-		if got.Metadata.Title != want {
-			t.Errorf("got %q, want %q", got.Metadata.Title, want)
-		}
+		assert.True(t, ok, "expected song %q, got empty queue", want)
+		assert.Equal(t, got.Metadata.Title, want)
 	}
 
 	_, ok := q.Pop()
-	if ok {
-		t.Error("expected empty queue after popping all songs")
-	}
+	assert.False(t, ok, "expected empty queue after popping all songs")
 }
 
 func TestAddReturnsPosition(t *testing.T) {
 	q := NewQueue()
 
-	if pos := q.Add(song("A")); pos != 1 {
-		t.Errorf("first Add returned %d, want 1", pos)
-	}
-	if pos := q.Add(song("B")); pos != 2 {
-		t.Errorf("second Add returned %d, want 2", pos)
-	}
+	assert.Equal(t, q.Add(song("A")), 1, "first Add")
+	assert.Equal(t, q.Add(song("B")), 2, "second Add")
 
 	q.Pop()
 
-	if pos := q.Add(song("C")); pos != 2 {
-		t.Errorf("Add after Pop returned %d, want 2", pos)
-	}
+	assert.Equal(t, q.Add(song("C")), 2, "Add after Pop")
 }
 
 func TestClear(t *testing.T) {
@@ -59,24 +48,13 @@ func TestClear(t *testing.T) {
 	q.Add(song("B"))
 	q.Add(song("C"))
 
-	n := q.Clear()
-	if n != 3 {
-		t.Errorf("Clear returned %d, want 3", n)
-	}
-
-	if q.Len() != 0 {
-		t.Errorf("Len after Clear = %d, want 0", q.Len())
-	}
+	assert.Equal(t, q.Clear(), 3)
+	assert.Equal(t, q.Len(), 0)
 
 	_, ok := q.Pop()
-	if ok {
-		t.Error("expected empty queue after Clear")
-	}
+	assert.False(t, ok, "expected empty queue after Clear")
 
-	n = q.Clear()
-	if n != 0 {
-		t.Errorf("Clear on empty returned %d, want 0", n)
-	}
+	assert.Equal(t, q.Clear(), 0)
 }
 
 func TestListSnapshotIndependence(t *testing.T) {
@@ -86,64 +64,40 @@ func TestListSnapshotIndependence(t *testing.T) {
 	q.Add(song("B"))
 
 	snapshot := q.List()
-	if len(snapshot) != 2 {
-		t.Fatalf("List returned %d songs, want 2", len(snapshot))
-	}
+	assert.Lenf(t, snapshot, 2)
 
 	snapshot[0] = song("X")
 
 	list2 := q.List()
-	if list2[0].Metadata.Title != "A" {
-		t.Error("mutating List snapshot affected the queue")
-	}
+	assert.Equal(t, list2[0].Metadata.Title, "A", "mutating List snapshot affected the queue")
 }
 
 func TestLen(t *testing.T) {
 	q := NewQueue()
 
-	if q.Len() != 0 {
-		t.Errorf("Len on empty = %d, want 0", q.Len())
-	}
+	assert.Equal(t, q.Len(), 0)
 
 	q.Add(song("A"))
 	q.Add(song("B"))
 
-	if q.Len() != 2 {
-		t.Errorf("Len = %d, want 2", q.Len())
-	}
+	assert.Equal(t, q.Len(), 2)
 
 	q.Pop()
 
-	if q.Len() != 1 {
-		t.Errorf("Len after Pop = %d, want 1", q.Len())
-	}
+	assert.Equal(t, q.Len(), 1)
 }
 
 func TestSignalClosesOnAdd(t *testing.T) {
 	q := NewQueue()
 
 	sig := q.Signal()
-
-	select {
-	case <-sig:
-		t.Fatal("signal closed before any Add")
-	default:
-	}
+	assert.ChanOpen(t, sig)
 
 	q.Add(song("A"))
-
-	select {
-	case <-sig:
-	default:
-		t.Fatal("signal not closed after Add")
-	}
+	assert.ChanClosed(t, sig)
 
 	sig2 := q.Signal()
-	select {
-	case <-sig2:
-		t.Fatal("new signal closed prematurely")
-	default:
-	}
+	assert.ChanOpen(t, sig2)
 }
 
 func TestConsumedSignalClosesOnPop(t *testing.T) {
@@ -151,28 +105,14 @@ func TestConsumedSignalClosesOnPop(t *testing.T) {
 	q.Add(song("A"))
 
 	consumed := q.Consumed()
-
-	select {
-	case <-consumed:
-		t.Fatal("consumed closed before any Pop")
-	default:
-	}
+	assert.ChanOpen(t, consumed)
 
 	q.Pop()
-
-	select {
-	case <-consumed:
-	default:
-		t.Fatal("consumed not closed after Pop")
-	}
+	assert.ChanClosed(t, consumed)
 
 	// New channel should be open.
 	consumed2 := q.Consumed()
-	select {
-	case <-consumed2:
-		t.Fatal("new consumed closed prematurely")
-	default:
-	}
+	assert.ChanOpen(t, consumed2)
 }
 
 func TestConsumedNotClosedOnAdd(t *testing.T) {
@@ -181,11 +121,7 @@ func TestConsumedNotClosedOnAdd(t *testing.T) {
 	consumed := q.Consumed()
 	q.Add(song("A"))
 
-	select {
-	case <-consumed:
-		t.Fatal("consumed closed after Add (should only close on Pop)")
-	default:
-	}
+	assert.ChanOpen(t, consumed)
 }
 
 func TestInserterOrdering(t *testing.T) {
@@ -202,12 +138,8 @@ func TestInserterOrdering(t *testing.T) {
 	expected := []string{"P1", "P2", "P3", "S1"}
 	for _, want := range expected {
 		got, ok := q.Pop()
-		if !ok {
-			t.Fatalf("expected song %q, got empty queue", want)
-		}
-		if got.Metadata.Title != want {
-			t.Errorf("got %q, want %q", got.Metadata.Title, want)
-		}
+		assert.True(t, ok, "expected song %q, got empty queue", want)
+		assert.Equal(t, got.Metadata.Title, want)
 	}
 }
 
@@ -219,9 +151,7 @@ func TestInserterWithPops(t *testing.T) {
 
 	// Pop existing song while inserter is active.
 	got, _ := q.Pop()
-	if got.Metadata.Title != "Existing" {
-		t.Fatalf("got %q, want %q", got.Metadata.Title, "Existing")
-	}
+	assert.Equalf(t, got.Metadata.Title, "Existing")
 
 	ins.Add(song("P1"))
 	ins.Add(song("P2"))
@@ -230,12 +160,8 @@ func TestInserterWithPops(t *testing.T) {
 	expected := []string{"P1", "P2"}
 	for _, want := range expected {
 		got, ok := q.Pop()
-		if !ok {
-			t.Fatalf("expected song %q, got empty queue", want)
-		}
-		if got.Metadata.Title != want {
-			t.Errorf("got %q, want %q", got.Metadata.Title, want)
-		}
+		assert.True(t, ok, "expected song %q, got empty queue", want)
+		assert.Equal(t, got.Metadata.Title, want)
 	}
 }
 
@@ -247,20 +173,13 @@ func TestInserterSkipAndClose(t *testing.T) {
 	ins.Skip()  // One fails to download.
 	ins.Close() // One remaining pending released.
 
-	pos := q.Add(song("S1"))
-	if pos != 2 {
-		t.Errorf("Add after inserter close returned %d, want 2", pos)
-	}
+	assert.Equal(t, q.Add(song("S1")), 2)
 
 	expected := []string{"P1", "S1"}
 	for _, want := range expected {
 		got, ok := q.Pop()
-		if !ok {
-			t.Fatalf("expected song %q, got empty queue", want)
-		}
-		if got.Metadata.Title != want {
-			t.Errorf("got %q, want %q", got.Metadata.Title, want)
-		}
+		assert.True(t, ok, "expected song %q, got empty queue", want)
+		assert.Equal(t, got.Metadata.Title, want)
 	}
 }
 
@@ -276,10 +195,7 @@ func TestInserterAfterClear(t *testing.T) {
 	ins.Skip()
 	ins.Close()
 
-	pos := q.Add(song("S1"))
-	if pos != 1 {
-		t.Errorf("Add after Clear returned %d, want 1", pos)
-	}
+	assert.Equal(t, q.Add(song("S1")), 1)
 }
 
 func TestMultipleInserters(t *testing.T) {
@@ -302,12 +218,8 @@ func TestMultipleInserters(t *testing.T) {
 	expected := []string{"P1a", "P1b", "P2a", "P2b", "S1"}
 	for _, want := range expected {
 		got, ok := q.Pop()
-		if !ok {
-			t.Fatalf("expected song %q, got empty queue", want)
-		}
-		if got.Metadata.Title != want {
-			t.Errorf("got %q, want %q", got.Metadata.Title, want)
-		}
+		assert.True(t, ok, "expected song %q, got empty queue", want)
+		assert.Equal(t, got.Metadata.Title, want)
 	}
 }
 
@@ -316,17 +228,11 @@ func TestAddPositionWithPending(t *testing.T) {
 
 	ins := q.NewInserter(5)
 
-	pos := q.Add(song("S1"))
-	if pos != 6 {
-		t.Errorf("Add with 5 pending returned %d, want 6", pos)
-	}
+	assert.Equal(t, q.Add(song("S1")), 6)
 
 	ins.Close()
 
-	pos = q.Add(song("S2"))
-	if pos != 2 {
-		t.Errorf("Add after close returned %d, want 2", pos)
-	}
+	assert.Equal(t, q.Add(song("S2")), 2)
 }
 
 func TestConcurrentAccess(t *testing.T) {
@@ -347,9 +253,7 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 
-	if q.Len() != n {
-		t.Errorf("Len = %d after %d concurrent adds, want %d", q.Len(), n, n)
-	}
+	assert.Equal(t, q.Len(), n)
 
 	wg.Add(n)
 	popped := make(chan bool, n)
@@ -369,7 +273,5 @@ func TestConcurrentAccess(t *testing.T) {
 			count++
 		}
 	}
-	if count != n {
-		t.Errorf("popped %d songs, want %d", count, n)
-	}
+	assert.Equal(t, count, n)
 }

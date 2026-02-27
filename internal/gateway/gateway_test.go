@@ -11,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/neiios/discord-music-bot/internal/assert"
 )
 
 type mockGatewayURLProvider struct {
@@ -113,31 +114,16 @@ func TestNewConnection_Success(t *testing.T) {
 	defer cancel()
 
 	conn, err := NewConnection(ctx, mockClient, "test-token")
+	assert.NoErrf(t, err)
+	assert.NotNilf(t, conn)
 
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if conn == nil {
-		t.Fatalf("expected non-nil connection")
-	}
+	assert.Equal(t, conn.SessionID, mockServer.sessionID)
+	assert.Equal(t, conn.SelfID, mockServer.userID)
+	assert.Equal(t, conn.resumeURL, mockServer.resumeURL)
 
-	if conn.SessionID != mockServer.sessionID {
-		t.Errorf("SessionID = %q, want %q", conn.SessionID, mockServer.sessionID)
-	}
-	if conn.SelfID != mockServer.userID {
-		t.Errorf("SelfID = %q, want %q", conn.SelfID, mockServer.userID)
-	}
-	if conn.resumeURL != mockServer.resumeURL {
-		t.Errorf("resumeURL = %q, want %q", conn.resumeURL, mockServer.resumeURL)
-	}
-
-	if len(mockServer.receivedEvents) < 1 {
-		t.Fatalf("expected >= 1 received events, got %d", len(mockServer.receivedEvents))
-	}
+	assert.Greaterf(t, len(mockServer.receivedEvents), 0)
 	identifyEvent := mockServer.receivedEvents[0]
-	if identifyEvent.Opcode != 2 {
-		t.Errorf("identify opcode = %d, want 2", identifyEvent.Opcode)
-	}
+	assert.Equal(t, identifyEvent.Opcode, 2)
 }
 
 func TestReadEvent(t *testing.T) {
@@ -171,9 +157,7 @@ func TestReadEvent(t *testing.T) {
 	defer cancel()
 
 	wsConn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer wsConn.Close(websocket.StatusNormalClosure, "done")
 
 	conn := &Connection{
@@ -182,32 +166,12 @@ func TestReadEvent(t *testing.T) {
 	}
 
 	event, err := conn.ReadEvent(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
-	if event.Opcode != 0 {
-		t.Errorf("Opcode = %d, want 0", event.Opcode)
-	}
-	if event.Name == nil {
-		t.Fatalf("expected non-nil Name")
-	}
-	if *event.Name != "TEST_EVENT" {
-		t.Errorf("Name = %q, want %q", *event.Name, "TEST_EVENT")
-	}
-	if event.SequenceNumber == nil {
-		t.Fatalf("expected non-nil SequenceNumber")
-	}
-	if *event.SequenceNumber != 42 {
-		t.Errorf("SequenceNumber = %d, want 42", *event.SequenceNumber)
-	}
-
-	if conn.LastSequenceNumber == nil {
-		t.Fatalf("expected non-nil LastSequenceNumber")
-	}
-	if *conn.LastSequenceNumber != 42 {
-		t.Errorf("LastSequenceNumber = %d, want 42", *conn.LastSequenceNumber)
-	}
+	assert.Equal(t, event.Opcode, 0)
+	assert.DerefEqual(t, event.Name, "TEST_EVENT")
+	assert.DerefEqual(t, event.SequenceNumber, 42)
+	assert.DerefEqual(t, conn.LastSequenceNumber, 42)
 }
 
 func TestSendEvent(t *testing.T) {
@@ -236,9 +200,7 @@ func TestSendEvent(t *testing.T) {
 	defer cancel()
 
 	wsConn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer wsConn.Close(websocket.StatusNormalClosure, "done")
 
 	conn := &Connection{
@@ -253,21 +215,11 @@ func TestSendEvent(t *testing.T) {
 	}
 
 	err = conn.SendEvent(ctx, testEvent)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 
-	select {
-	case receivedEvent := <-eventReceived:
-		if receivedEvent.Opcode != 4 {
-			t.Errorf("Opcode = %d, want 4", receivedEvent.Opcode)
-		}
-		if receivedEvent.Data == nil {
-			t.Fatalf("expected non-nil Data")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for event")
-	}
+	receivedEvent := assert.Recv(t, eventReceived, 2*time.Second)
+	assert.Equal(t, receivedEvent.Opcode, 4)
+	assert.NotNilf(t, receivedEvent.Data)
 }
 
 func TestHeartbeat(t *testing.T) {
@@ -299,9 +251,7 @@ func TestHeartbeat(t *testing.T) {
 	defer cancel()
 
 	wsConn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NoErrf(t, err)
 	defer wsConn.Close(websocket.StatusNormalClosure, "done")
 
 	seqNum := 123
@@ -313,23 +263,11 @@ func TestHeartbeat(t *testing.T) {
 
 	conn.startHeartbeat(ctx, 100)
 
-	select {
-	case event := <-heartbeatReceived:
-		if event.Opcode != 1 {
-			t.Errorf("Opcode = %d, want 1", event.Opcode)
-		}
-		if event.Data == nil {
-			t.Fatalf("expected non-nil Data")
-		}
-		var heartbeatSeq int
-		err := json.Unmarshal(*event.Data, &heartbeatSeq)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if heartbeatSeq != 123 {
-			t.Errorf("heartbeat seq = %d, want 123", heartbeatSeq)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for heartbeat")
-	}
+	event := assert.Recv(t, heartbeatReceived, 2*time.Second)
+	assert.Equal(t, event.Opcode, 1)
+	assert.NotNilf(t, event.Data)
+	var heartbeatSeq int
+	err = json.Unmarshal(*event.Data, &heartbeatSeq)
+	assert.NoErrf(t, err)
+	assert.Equal(t, heartbeatSeq, 123)
 }

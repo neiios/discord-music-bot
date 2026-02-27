@@ -5,6 +5,8 @@ import (
 	"context"
 	"net/url"
 	"testing"
+
+	"github.com/neiios/discord-music-bot/internal/assert"
 )
 
 func TestGetSongMetadataE2E(t *testing.T) {
@@ -17,20 +19,14 @@ func TestGetSongMetadataE2E(t *testing.T) {
 		}
 
 		result, err := GetSongMetadata(context.Background(), *url)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		if result != metadata {
-			t.Errorf("got %v, want %v", result, metadata)
-		}
+		assert.NoErr(t, err)
+		assert.Equal(t, result, metadata)
 	})
 
 	t.Run("invalid URL", func(t *testing.T) {
 		invalidURL, _ := url.ParseRequestURI("https://www.youtube.com/watch?v=AAAAAAAAAAA")
 		_, err := GetSongMetadata(context.Background(), *invalidURL)
-		if err == nil {
-			t.Errorf("expected error, got nil")
-		}
+		assert.IsErr(t, err)
 	})
 }
 
@@ -44,17 +40,9 @@ func TestDownloadSongE2E(t *testing.T) {
 		}
 
 		song, err := DownloadSong(context.Background(), metadata)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		if song.Metadata != metadata {
-			t.Errorf("got metadata %v, want %v", song.Metadata, metadata)
-		}
-		if len(song.Audio) <= 0 {
-			t.Errorf("expected audio length > 0, got %d", len(song.Audio))
-		}
-		if !bytes.HasPrefix(song.Audio, []byte("OggS")) {
-			t.Errorf("audio should be Ogg/Opus container")
-		}
+		assert.NoErr(t, err)
+		assert.Equal(t, song.Metadata, metadata)
+		assert.Greater(t, len(song.Audio), 0)
+		assert.True(t, bytes.HasPrefix(song.Audio, []byte("OggS")), "audio should be Ogg/Opus container")
 	})
 }

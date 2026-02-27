@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/neiios/discord-music-bot/internal/assert"
 	"github.com/neiios/discord-music-bot/internal/downloader"
 )
 
@@ -17,26 +18,14 @@ func TestExtractOpusPacketsE2E(t *testing.T) {
 	}
 
 	song, err := downloader.DownloadSong(context.Background(), metadata)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if song.Metadata != metadata {
-		t.Fatalf("got metadata %v, want %v", song.Metadata, metadata)
-	}
+	assert.NoErrf(t, err)
+	assert.Equalf(t, song.Metadata, metadata)
 
 	packets, err := ExtractOpusPackets(song.Audio)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(packets) == 0 {
-		t.Fatalf("expected non-empty packets")
-	}
+	assert.NoErrf(t, err)
+	assert.NotEmpty(t, packets)
 
 	expectedMinPackets := metadata.DurationSec * 40
-	if len(packets) < expectedMinPackets {
-		t.Fatalf("got %d packets, want >= %d", len(packets), expectedMinPackets)
-	}
-	if len(packets[0]) <= 0 {
-		t.Fatalf("expected first packet length > 0, got %d", len(packets[0]))
-	}
+	assert.GreaterOrEqual(t, len(packets), expectedMinPackets)
+	assert.Greater(t, len(packets[0]), 0)
 }
