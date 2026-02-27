@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"sync"
@@ -40,10 +41,10 @@ func NewConnection(ctx context.Context, client api.GatewayURLProvider, token str
 	parsedUrl.RawQuery = query.Encode()
 
 	websocketConn, _, err := websocket.Dial(ctx, parsedUrl.String(), nil)
-	slog.Info("connected to gateway")
 	if err != nil {
 		return nil, err
 	}
+	slog.Info("connected to gateway")
 
 	connection := &Connection{
 		connection: websocketConn,
@@ -51,6 +52,9 @@ func NewConnection(ctx context.Context, client api.GatewayURLProvider, token str
 	}
 
 	event, err := connection.ReadEvent(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var hello Hello
 	if err := json.Unmarshal(*event.Data, &hello); err != nil {
 		return nil, err
@@ -76,8 +80,7 @@ func NewConnection(ctx context.Context, client api.GatewayURLProvider, token str
 		return nil, err
 	}
 	if event.Name == nil || *event.Name != "READY" {
-		slog.Error("expected ready event after identify", "event", event)
-		return nil, err
+		return nil, fmt.Errorf("expected READY event, got %v", event.Name)
 	}
 
 	var ready ReadyEvent
