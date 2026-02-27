@@ -6,38 +6,46 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/neiios/discord-music-bot/internal/api"
 	"github.com/neiios/discord-music-bot/internal/downloader"
 	"github.com/neiios/discord-music-bot/internal/env"
 	"github.com/neiios/discord-music-bot/internal/gateway"
 )
 
-// Manager coordinates voice connection lifecycle and audio playback.
 type Manager struct {
-	env         env.Env
-	gateway     *gateway.Connection
-	playQueue   chan downloader.Song
+	env       env.Env
+	gateway   *gateway.Connection
+	apiClient *api.Client
+	channelID string
+	queue     *Queue
+
 	mu          sync.Mutex
 	voiceState  *gateway.VoiceState
 	voiceServer *gateway.VoiceServerUpdate
 	voiceConn   *Connection
+	nowPlaying  *downloader.Song
+
+	skipMu     sync.Mutex
+	skipCancel context.CancelFunc
 }
 
-// NewManager creates a new voice Manager and starts the background playback loop.
-func NewManager(ctx context.Context, gw *gateway.Connection, env env.Env) *Manager {
+func NewManager(ctx context.Context, gw *gateway.Connection, env env.Env, apiClient *api.Client) *Manager {
 	m := &Manager{
 		env:       env,
 		gateway:   gw,
-		playQueue: make(chan downloader.Song, 3),
+		apiClient: apiClient,
+		channelID: env.MusicChannelId,
+		queue:     NewQueue(),
 	}
 
 	go m.playLoop(ctx)
 	return m
 }
 
-// HandlePlay initiates voice connection and queues a song for download and playback.
 func (m *Manager) HandlePlay(ctx context.Context, url url.URL) {
 	if err := m.sendVoiceStateUpdate(ctx); err != nil {
 		slog.Error("failed to request voice state", "error", err)
@@ -45,12 +53,48 @@ func (m *Manager) HandlePlay(ctx context.Context, url url.URL) {
 	go m.downloadAndQueue(ctx, url)
 }
 
-// HandleConnect requests joining the configured voice channel.
 func (m *Manager) HandleConnect(ctx context.Context) error {
 	return m.sendVoiceStateUpdate(ctx)
 }
 
-// HandleVoiceStateUpdate processes voice state updates from the gateway.
+func (m *Manager) HandleSkip() {
+	m.skipMu.Lock()
+	cancel := m.skipCancel
+	m.skipMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (m *Manager) HandleStop() {
+	m.queue.Clear()
+	m.HandleSkip()
+}
+
+func (m *Manager) HandleQueue() {
+	m.mu.Lock()
+	np := m.nowPlaying
+	m.mu.Unlock()
+
+	upcoming := m.queue.List()
+
+	if np == nil && len(upcoming) == 0 {
+		m.sendFeedback("Queue is empty.")
+		return
+	}
+
+	var b strings.Builder
+	if np != nil {
+		fmt.Fprintf(&b, "Now playing: %s\n", np.Metadata.Title)
+	}
+	for i, song := range upcoming {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, song.Metadata.Title)
+	}
+
+	m.sendFeedback(b.String())
+}
+
 func (m *Manager) HandleVoiceStateUpdate(state gateway.VoiceState) {
 	if state.UserID != m.gateway.SelfID {
 		return
@@ -66,7 +110,6 @@ func (m *Manager) HandleVoiceStateUpdate(state gateway.VoiceState) {
 	}
 }
 
-// HandleVoiceServerUpdate processes voice server updates from the gateway.
 func (m *Manager) HandleVoiceServerUpdate(update gateway.VoiceServerUpdate) {
 	if update.GuildID != m.env.GuildId {
 		return
@@ -84,31 +127,58 @@ func (m *Manager) HandleVoiceServerUpdate(update gateway.VoiceServerUpdate) {
 
 func (m *Manager) playLoop(ctx context.Context) {
 	for {
+		signal := m.queue.Signal()
 		select {
 		case <-ctx.Done():
 			return
-		case song := <-m.playQueue:
+		case <-signal:
+		}
+
+		for {
+			song, ok := m.queue.Pop()
+			if !ok {
+				break
+			}
+
+			m.mu.Lock()
+			m.nowPlaying = &song
+			m.mu.Unlock()
+
 			conn, err := m.ensureVoiceConnection(ctx)
 			if err != nil {
 				slog.Error("failed to establish voice connection", "error", err)
+				m.mu.Lock()
+				m.nowPlaying = nil
+				m.mu.Unlock()
 				continue
 			}
 
 			packets, err := ExtractOpusPackets(song.Audio)
 			if err != nil {
 				slog.Error("failed to extract opus packets", "error", err)
+				m.mu.Lock()
+				m.nowPlaying = nil
+				m.mu.Unlock()
 				continue
 			}
 
 			slog.Info("starting playback", "title", song.Metadata.Title, "packets", len(packets))
+			m.sendFeedback(fmt.Sprintf("Now playing: %s", song.Metadata.Title))
 
-			// Send packets through the OpusSend channel
-			if err := m.sendPackets(ctx, conn, packets); err != nil {
-				slog.Error("playback interrupted", "error", err, "title", song.Metadata.Title)
-				continue
+			songCtx, songCancel := context.WithCancel(ctx)
+			m.skipMu.Lock()
+			m.skipCancel = songCancel
+			m.skipMu.Unlock()
+
+			if err := m.sendPackets(songCtx, conn, packets); err != nil {
+				slog.Info("playback interrupted", "error", err, "title", song.Metadata.Title)
 			}
 
-			// Send silence frames to signal end of audio
+			m.skipMu.Lock()
+			m.skipCancel = nil
+			m.skipMu.Unlock()
+			songCancel()
+
 			silenceFrame := GetSilenceFrame()
 			for i := 0; i < 5; i++ {
 				select {
@@ -118,20 +188,21 @@ func (m *Manager) playLoop(ctx context.Context) {
 				}
 			}
 
-			// Turn off speaking after playback
 			if err := conn.Speaking(false); err != nil {
 				slog.Warn("failed to turn off speaking", "error", err)
 			}
+
+			m.mu.Lock()
+			m.nowPlaying = nil
+			m.mu.Unlock()
 
 			slog.Info("playback complete", "title", song.Metadata.Title)
 		}
 	}
 }
 
-// sendPackets sends opus packets through the connection's OpusSend channel.
 func (m *Manager) sendPackets(ctx context.Context, conn *Connection, packets [][]byte) error {
 	for _, packet := range packets {
-		// Check if connection is still ready
 		conn.RLock()
 		ready := conn.Ready
 		conn.RUnlock()
@@ -144,7 +215,6 @@ func (m *Manager) sendPackets(ctx context.Context, conn *Connection, packets [][
 		case <-ctx.Done():
 			return ctx.Err()
 		case conn.OpusSend <- packet:
-			// Packet sent successfully
 		}
 	}
 	return nil
@@ -164,12 +234,10 @@ func (m *Manager) ensureVoiceConnection(ctx context.Context) (*Connection, error
 		}
 	}
 
-	// Request voice connection if needed
 	if err := m.sendVoiceStateUpdate(ctx); err != nil {
 		return nil, err
 	}
 
-	// Wait for voice state and server updates
 	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
@@ -180,7 +248,6 @@ func (m *Manager) ensureVoiceConnection(ctx context.Context) (*Connection, error
 		existingConn := m.voiceConn
 		m.mu.Unlock()
 
-		// If we have an existing ready connection, use it
 		if existingConn != nil {
 			existingConn.RLock()
 			ready := existingConn.Ready
@@ -190,7 +257,6 @@ func (m *Manager) ensureVoiceConnection(ctx context.Context) (*Connection, error
 			}
 		}
 
-		// Create new connection if we have state and server info
 		if state != nil && server != nil && existingConn == nil {
 			cfg := ConnectionConfig{
 				UserID:      m.gateway.SelfID,
@@ -203,7 +269,6 @@ func (m *Manager) ensureVoiceConnection(ctx context.Context) (*Connection, error
 				return nil, fmt.Errorf("failed to connect: %w", err)
 			}
 
-			// Wait for connection to be ready
 			if err := conn.WaitUntilConnected(10 * time.Second); err != nil {
 				conn.Close()
 				return nil, fmt.Errorf("connection did not become ready: %w", err)
@@ -252,24 +317,38 @@ func (m *Manager) downloadAndQueue(ctx context.Context, url url.URL) {
 	metadata, err := downloader.GetSongMetadata(url)
 	if err != nil {
 		slog.Error("failed to get song metadata", "error", err, "url", url)
+		m.sendFeedback(fmt.Sprintf("Failed to get metadata for %s", url.String()))
 		return
 	}
 
 	if metadata.DurationSec > 3*60*60 {
 		slog.Error("song too long", "duration", metadata.DurationSec, "title", metadata.Title)
+		m.sendFeedback(fmt.Sprintf("Song too long (>3h): %s", metadata.Title))
 		return
 	}
 
 	song, err := downloader.DownloadSong(metadata)
 	if err != nil {
 		slog.Error("failed to download song", "error", err, "title", metadata.Title)
+		m.sendFeedback(fmt.Sprintf("Failed to download: %s", metadata.Title))
 		return
 	}
 
-	select {
-	case m.playQueue <- song:
-		slog.Info("queued song for playback", "title", song.Metadata.Title)
-	case <-ctx.Done():
-		return
+	pos := m.queue.Add(song)
+
+	m.mu.Lock()
+	playing := m.nowPlaying != nil
+	m.mu.Unlock()
+
+	if pos > 1 || playing {
+		m.sendFeedback(fmt.Sprintf("Queued: %s (position #%d)", song.Metadata.Title, pos))
+	}
+
+	slog.Info("queued song for playback", "title", song.Metadata.Title, "position", pos)
+}
+
+func (m *Manager) sendFeedback(content string) {
+	if err := m.apiClient.SendMessage(m.channelID, content); err != nil {
+		slog.Error("failed to send feedback message", "error", err)
 	}
 }

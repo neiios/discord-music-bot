@@ -161,6 +161,29 @@ func (c *Client) DeleteGlobalApplicationCommand(commandID string) error {
 	return nil
 }
 
+func (c *Client) SendMessage(channelID, content string) error {
+	body, err := json.Marshal(CreateMessageRequest{Content: content})
+	if err != nil {
+		return err
+	}
+
+	res, err := c.Client.Post(
+		fmt.Sprintf("%s/channels/%s/messages", c.BaseUrl, channelID),
+		"application/json",
+		bytes.NewBuffer(body),
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to send message, status code: %d", res.StatusCode)
+	}
+
+	return nil
+}
+
 func (c *Client) BulkOverwriteGlobalApplicationCommands() error {
 	req, err := http.NewRequest(http.MethodPut, fmt.Sprintf("%s/applications/%s/commands", c.BaseUrl, c.AppId), nil)
 	if err != nil {

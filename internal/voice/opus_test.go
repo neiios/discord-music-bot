@@ -31,7 +31,7 @@ func TestExtractOpusPacketsE2E(t *testing.T) {
 		t.Fatalf("expected non-empty packets")
 	}
 
-	expectedMinPackets := metadata.DurationSec * 40 // ~20ms frames => ~50 fps; allow slack
+	expectedMinPackets := metadata.DurationSec * 40
 	if len(packets) < expectedMinPackets {
 		t.Fatalf("got %d packets, want >= %d", len(packets), expectedMinPackets)
 	}

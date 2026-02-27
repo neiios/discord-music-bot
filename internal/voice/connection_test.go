@@ -289,7 +289,6 @@ func TestWaitUntilConnected(t *testing.T) {
 			Ready: false,
 		}
 
-		// Make connection ready after 200ms
 		go func() {
 			time.Sleep(200 * time.Millisecond)
 			conn.Lock()
@@ -312,7 +311,6 @@ func TestWaitUntilConnected(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	t.Run("closes all resources", func(t *testing.T) {
-		// Create a real UDP listener to test cleanup
 		addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -348,10 +346,8 @@ func TestClose(t *testing.T) {
 			t.Errorf("expected udpConn to be nil")
 		}
 
-		// Verify close channel is closed
 		select {
 		case <-closeChan:
-			// Expected - channel is closed
 		default:
 			t.Error("close channel should be closed")
 		}
@@ -364,7 +360,6 @@ func TestClose(t *testing.T) {
 			close: closeChan,
 		}
 
-		// Should not panic
 		conn.Close()
 		conn.Close()
 
@@ -405,7 +400,6 @@ func TestOpusSender_ReceivesFromChannel(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Create UDP listener
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -436,14 +430,11 @@ func TestOpusSender_ReceivesFromChannel(t *testing.T) {
 		Ready:    true,
 	}
 
-	// Start the opus sender
 	go conn.opusSender()
 
-	// Send a test frame
 	testFrame := []byte{0xFC, 0xFF, 0xFE}
 	opusSend <- testFrame
 
-	// Read from listener with timeout
 	buf := make([]byte, 1024)
 	listener.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	n, err := listener.Read(buf)
@@ -454,7 +445,6 @@ func TestOpusSender_ReceivesFromChannel(t *testing.T) {
 		t.Errorf("packet size %d should be > 12", n)
 	}
 
-	// Verify RTP header
 	if buf[0] != 0x80 {
 		t.Errorf("buf[0] = 0x%02X, want 0x80", buf[0])
 	}
@@ -462,7 +452,6 @@ func TestOpusSender_ReceivesFromChannel(t *testing.T) {
 		t.Errorf("buf[1] = 0x%02X, want 0x%02X", buf[1], byte(payloadTypeOpus))
 	}
 
-	// Clean up
 	close(closeChan)
 }
 
@@ -516,10 +505,8 @@ func TestOpusSender_StopsOnClose(t *testing.T) {
 		wg.Done()
 	}()
 
-	// Close the channel
 	close(closeChan)
 
-	// Wait for goroutine to exit with timeout
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -528,7 +515,6 @@ func TestOpusSender_StopsOnClose(t *testing.T) {
 
 	select {
 	case <-done:
-		// Expected - goroutine exited
 	case <-time.After(500 * time.Millisecond):
 		t.Error("opusSender did not stop after close signal")
 	}
@@ -557,9 +543,6 @@ func TestUDPKeepAlive_SendsPackets(t *testing.T) {
 		close:   closeChan,
 	}
 
-	// We'll test by modifying the keepalive to use a shorter interval
-	// For unit testing, we just verify the function can run and stop
-
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -567,10 +550,8 @@ func TestUDPKeepAlive_SendsPackets(t *testing.T) {
 		wg.Done()
 	}()
 
-	// Let it run briefly
 	time.Sleep(50 * time.Millisecond)
 
-	// Close and verify it stops
 	close(closeChan)
 
 	done := make(chan struct{})
@@ -581,7 +562,6 @@ func TestUDPKeepAlive_SendsPackets(t *testing.T) {
 
 	select {
 	case <-done:
-		// Expected
 	case <-time.After(6 * time.Second):
 		t.Error("udpKeepAlive did not stop after close signal")
 	}
@@ -601,7 +581,6 @@ func TestGetSilenceFrame(t *testing.T) {
 }
 
 func TestConnectionConfig(t *testing.T) {
-	// Test that ConnectionConfig can be created with all fields
 	cfg := ConnectionConfig{
 		UserID: "123456",
 		State: struct {
@@ -700,7 +679,6 @@ func TestSendRTPPacket_IncrementCounters(t *testing.T) {
 		nonce:     50,
 	}
 
-	// Send multiple packets
 	for i := 0; i < 3; i++ {
 		err := conn.sendRTPPacket([]byte{0xFC, 0xFF, 0xFE})
 		if err != nil {
@@ -708,7 +686,6 @@ func TestSendRTPPacket_IncrementCounters(t *testing.T) {
 		}
 	}
 
-	// Verify counters incremented correctly
 	if conn.sequence != 103 {
 		t.Errorf("sequence = %d, want 103", conn.sequence)
 	}
@@ -740,12 +717,10 @@ func TestVoiceHeartbeatPayloadSerialization(t *testing.T) {
 		t.Errorf("seq_ack = %v, want %v", parsed["seq_ack"], float64(10))
 	}
 
-	// Verify it matches the v8 format: {"t": <nonce>, "seq_ack": <seq>}
 	if len(parsed) != 2 {
 		t.Errorf("parsed map length = %d, want 2", len(parsed))
 	}
 
-	// Verify negative seq_ack (initial state) serializes correctly
 	payload = voiceHeartbeatPayload{T: 42, SeqAck: -1}
 	data, err = json.Marshal(payload)
 	if err != nil {
@@ -842,7 +817,6 @@ func TestSendRTPPacket_ConcurrentSafe(t *testing.T) {
 		nonce:     0,
 	}
 
-	// Launch multiple goroutines sending packets concurrently
 	var wg sync.WaitGroup
 	numGoroutines := 10
 	packetsPerGoroutine := 10
@@ -862,7 +836,6 @@ func TestSendRTPPacket_ConcurrentSafe(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify total packets sent (counters should reflect all sends)
 	totalPackets := numGoroutines * packetsPerGoroutine
 	if conn.sequence != uint16(totalPackets) {
 		t.Errorf("sequence = %d, want %d", conn.sequence, totalPackets)
@@ -875,8 +848,6 @@ func TestSendRTPPacket_ConcurrentSafe(t *testing.T) {
 	}
 }
 
-// startMockUDPServer starts a UDP listener that handles IP discovery requests.
-// Returns the UDP connection (for cleanup) and its address (for the READY payload).
 func startMockUDPServer(t *testing.T) (*net.UDPConn, *net.UDPAddr) {
 	t.Helper()
 
@@ -900,10 +871,8 @@ func startMockUDPServer(t *testing.T) (*net.UDPConn, *net.UDPAddr) {
 			return
 		}
 
-		// Parse request: type 0x0001, length 70, SSRC at bytes 4-7
 		ssrc := binary.BigEndian.Uint32(buf[4:8])
 
-		// Build response: type 0x0002, length 70, echoed SSRC, IP at offset 8, port at bytes 72-73
 		resp := make([]byte, 74)
 		binary.BigEndian.PutUint16(resp[0:], 0x0002)
 		binary.BigEndian.PutUint16(resp[2:], 70)
@@ -926,7 +895,6 @@ type mockVoiceServer struct {
 	mode              string
 	secretKey         []byte
 
-	// Seq values to send with READY and SESSION DESCRIPTION
 	readySeq   int
 	sessionSeq int
 
@@ -953,7 +921,6 @@ func (m *mockVoiceServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// 1. Send HELLO (op 8)
 	hello := voiceHello{HeartbeatInterval: m.heartbeatInterval}
 	helloData, _ := json.Marshal(hello)
 	helloEvent := voiceEvent{Opcode: 8, Data: json.RawMessage(helloData)}
@@ -961,7 +928,6 @@ func (m *mockVoiceServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Read IDENTIFY (op 0)
 	var identifyEvent voiceEvent
 	if err := wsjson.Read(ctx, wsConn, &identifyEvent); err != nil {
 		return
@@ -976,7 +942,6 @@ func (m *mockVoiceServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 	}
 
-	// 3. Send READY (op 2) with seq
 	ready := voiceReady{
 		SSRC:  m.ssrc,
 		IP:    m.udpIP,
@@ -990,7 +955,6 @@ func (m *mockVoiceServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Read loop until SELECT PROTOCOL (op 1), handling interleaved heartbeats
 	for {
 		var event voiceEvent
 		if err := wsjson.Read(ctx, wsConn, &event); err != nil {
@@ -999,12 +963,12 @@ func (m *mockVoiceServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.storeEvent(event)
 
 		switch event.Opcode {
-		case 3: // Heartbeat - send ACK (op 6)
+		case 3:
 			ackEvent := voiceEvent{Opcode: 6, Data: event.Data}
 			if err := wsjson.Write(ctx, wsConn, ackEvent); err != nil {
 				return
 			}
-		case 1: // SELECT PROTOCOL
+		case 1:
 			var sp selectProtocol
 			if err := json.Unmarshal(event.Data, &sp); err != nil {
 				return
@@ -1018,7 +982,6 @@ func (m *mockVoiceServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 sendSessionDesc:
-	// 5. Send SESSION DESCRIPTION (op 4) with seq
 	desc := sessionDescription{
 		Mode:      m.mode,
 		SecretKey: m.secretKey,
@@ -1030,7 +993,6 @@ sendSessionDesc:
 		return
 	}
 
-	// 6. Read loop: handle heartbeats, exit on error
 	for {
 		var event voiceEvent
 		if err := wsjson.Read(ctx, wsConn, &event); err != nil {
@@ -1048,7 +1010,6 @@ sendSessionDesc:
 			default:
 			}
 
-			// Send ACK (op 6)
 			ackEvent := voiceEvent{Opcode: 6, Data: event.Data}
 			if err := wsjson.Write(ctx, wsConn, ackEvent); err != nil {
 				return
@@ -1058,7 +1019,6 @@ sendSessionDesc:
 }
 
 func TestVoiceConnectionFlow(t *testing.T) {
-	// Start mock UDP server
 	udpConn, udpAddr := startMockUDPServer(t)
 	defer udpConn.Close()
 
@@ -1112,7 +1072,6 @@ func TestVoiceConnectionFlow(t *testing.T) {
 		t.Errorf("expected Ready to be true")
 	}
 
-	// Verify IDENTIFY payload
 	select {
 	case identify := <-mockServer.identifyReceived:
 		if identify.ServerID != "guild456" {
@@ -1134,7 +1093,6 @@ func TestVoiceConnectionFlow(t *testing.T) {
 		t.Fatal("timed out waiting for IDENTIFY")
 	}
 
-	// Verify SELECT PROTOCOL payload
 	select {
 	case sp := <-mockServer.selectReceived:
 		if sp.Protocol != "udp" {
@@ -1153,7 +1111,6 @@ func TestVoiceConnectionFlow(t *testing.T) {
 		t.Fatal("timed out waiting for SELECT PROTOCOL")
 	}
 
-	// Verify internal state
 	if conn.ssrc != 12345 {
 		t.Errorf("ssrc = %d, want 12345", conn.ssrc)
 	}
@@ -1170,12 +1127,10 @@ func TestVoiceConnectionFlow(t *testing.T) {
 		t.Errorf("expected non-nil udpConn")
 	}
 
-	// Verify seq tracking: READY had seq 1, SESSION DESCRIPTION had seq 2
 	if conn.seqAck.Load() != 2 {
 		t.Errorf("seqAck = %d, want 2", conn.seqAck.Load())
 	}
 
-	// Verify heartbeat v8 format
 	select {
 	case hb := <-mockServer.heartbeats:
 		if hb.T == 0 {
@@ -1190,7 +1145,6 @@ func TestVoiceConnectionFlow(t *testing.T) {
 }
 
 func TestSeqAckTracking(t *testing.T) {
-	// Start mock UDP server
 	udpConn, udpAddr := startMockUDPServer(t)
 	defer udpConn.Close()
 
@@ -1240,12 +1194,10 @@ func TestSeqAckTracking(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// After Connect: seqAck should be 10 (last seq from SESSION DESCRIPTION)
 	if conn.seqAck.Load() != 10 {
 		t.Errorf("seqAck = %d, want 10", conn.seqAck.Load())
 	}
 
-	// First heartbeat should echo seq_ack: 10
 	select {
 	case hb := <-mockServer.heartbeats:
 		if hb.T == 0 {

@@ -41,7 +41,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	voiceManager := voice.NewManager(ctx, connection, env)
+	voiceManager := voice.NewManager(ctx, connection, env, discordClient)
 
 	for {
 		event, err := connection.ReadEvent(ctx)
@@ -108,6 +108,12 @@ func handleMessage(ctx context.Context, message gateway.Message, manager *voice.
 		if err := manager.HandleConnect(ctx); err != nil {
 			slog.Error("failed to request voice connection", "error", err)
 		}
+	case "/skip":
+		manager.HandleSkip()
+	case "/stop":
+		manager.HandleStop()
+	case "/queue":
+		manager.HandleQueue()
 	default:
 	}
 }

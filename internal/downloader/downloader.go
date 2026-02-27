@@ -13,7 +13,6 @@ import (
 )
 
 func DownloadSong(metadata Metadata) (Song, error) {
-	// yt-dlp --no-playlist --extract-audio --audio-format opus <url> -o <temp>.opus
 	slog.Info("downloading song", "metadata", metadata)
 	tmpDir, err := os.MkdirTemp("", "discord-music-*")
 	if err != nil {
@@ -46,7 +45,6 @@ func DownloadSong(metadata Metadata) (Song, error) {
 }
 
 func GetSongMetadata(url url.URL) (Metadata, error) {
-	// yt-dlp --no-playlist --dump-json --extract-audio --audio-format opus <url>
 	cmd := exec.Command("yt-dlp", "--no-playlist", "--dump-json", "--extract-audio", "--audio-format", "opus", url.String())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
