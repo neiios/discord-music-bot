@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/neiios/discord-music-bot/internal/api"
 	"github.com/neiios/discord-music-bot/internal/env"
@@ -16,32 +18,32 @@ import (
 )
 
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	env, err := env.Read()
+	cfg, err := env.Read()
 	if err != nil {
 		slog.Error("failed to read environment variables", "error", err)
 		os.Exit(1)
 	}
 
 	discordApiBaseUrl := "https://discord.com/api/v10"
-	discordClient, err := api.NewClient(discordApiBaseUrl, env.Token)
+	discordClient, err := api.NewClient(discordApiBaseUrl, cfg.Token)
 	if err != nil {
 		slog.Error("failed to create discord client", "error", err)
 		os.Exit(1)
 	}
 
-	connection, err := gateway.NewConnection(ctx, discordClient, env.Token)
+	connection, err := gateway.NewConnection(ctx, discordClient, cfg.Token)
 	if err != nil {
 		slog.Error("failed to connect to gateway", "error", err)
 		os.Exit(1)
 	}
 
-	voiceManager := voice.NewManager(ctx, connection, env, discordClient)
+	voiceManager := voice.NewManager(ctx, connection, cfg, discordClient)
 
 	for {
 		event, err := connection.ReadEvent(ctx)
@@ -57,7 +59,7 @@ func main() {
 				slog.Error("failed to unmarshal message", "error", err)
 				continue
 			}
-			handleMessage(ctx, message, voiceManager, env)
+			handleMessage(ctx, message, voiceManager, cfg)
 		case event.Name != nil && *event.Name == "VOICE_STATE_UPDATE":
 			var state gateway.VoiceState
 			if err := json.Unmarshal(*event.Data, &state); err != nil {
@@ -76,11 +78,11 @@ func main() {
 	}
 }
 
-func handleMessage(ctx context.Context, message gateway.Message, manager *voice.Manager, env env.Env) {
-	if message.ChannelID != env.MusicChannelId {
+func handleMessage(ctx context.Context, message gateway.Message, manager *voice.Manager, cfg env.Env) {
+	if message.ChannelID != cfg.MusicChannelId {
 		return
 	}
-	if message.GuildID != "" && message.GuildID != env.GuildId {
+	if message.GuildID != "" && message.GuildID != cfg.GuildId {
 		return
 	}
 
