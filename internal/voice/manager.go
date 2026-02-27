@@ -418,6 +418,9 @@ func (m *Manager) downloadPlaylist(ctx context.Context, entries []downloader.Pla
 	loaderID := m.registerLoader(loaderCancel)
 	defer m.unregisterLoader(loaderID)
 
+	inserter := m.queue.NewInserter(len(entries))
+	defer inserter.Close()
+
 	const preloadBuffer = 2
 	for i, entry := range entries {
 		// Wait until the queue has room.
@@ -434,23 +437,27 @@ func (m *Manager) downloadPlaylist(ctx context.Context, entries []downloader.Pla
 		metadata, err := entry.ToMetadata()
 		if err != nil {
 			slog.Warn("playlist entry has no URL, skipping", "id", entry.ID, "title", entry.Title)
+			inserter.Skip()
 			continue
 		}
 
 		metadata, err = downloader.GetSongMetadata(loaderCtx, metadata.URL)
 		if err != nil {
 			slog.Warn("failed to get metadata for playlist entry", "title", entry.Title, "error", err)
+			inserter.Skip()
 			continue
 		}
 
 		if metadata.DurationSec > 3*60*60 {
 			slog.Warn("skipping playlist entry (>3h)", "title", metadata.Title, "duration", metadata.DurationSec)
+			inserter.Skip()
 			continue
 		}
 
 		song, err := downloader.DownloadSong(loaderCtx, metadata)
 		if err != nil {
 			slog.Warn("failed to download playlist entry", "title", metadata.Title, "error", err)
+			inserter.Skip()
 			continue
 		}
 
@@ -461,7 +468,7 @@ func (m *Manager) downloadPlaylist(ctx context.Context, entries []downloader.Pla
 		default:
 		}
 
-		m.queue.Add(song)
+		inserter.Add(song)
 		slog.Info("queued playlist entry", "title", song.Metadata.Title, "index", i+1, "total", len(entries))
 	}
 
