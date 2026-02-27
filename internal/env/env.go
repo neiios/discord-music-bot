@@ -8,8 +8,6 @@ import (
 
 type Env struct {
 	Token          string
-	ClientId       string
-	ClientSecret   string
 	GuildId        string
 	MusicChannelId string
 	VoiceChannelId string
@@ -28,8 +26,6 @@ func Read() (Env, error) {
 	}
 
 	lookup("TOKEN", &env.Token)
-	lookup("CLIENT_ID", &env.ClientId)
-	lookup("CLIENT_SECRET", &env.ClientSecret)
 	lookup("GUILD_ID", &env.GuildId)
 	lookup("MUSIC_CHANNEL_ID", &env.MusicChannelId)
 	lookup("VOICE_CHANNEL_ID", &env.VoiceChannelId)
