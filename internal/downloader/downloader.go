@@ -28,7 +28,7 @@ func DownloadSong(ctx context.Context, metadata Metadata) (Song, error) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		slog.Info("yt-dlp stderr", "stderr", stderr.String())
+		slog.Warn("yt-dlp stderr", "stderr", stderr.String())
 		return Song{}, err
 	}
 
@@ -53,7 +53,7 @@ func GetSongMetadata(ctx context.Context, url url.URL) (Metadata, error) {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
-		slog.Info("yt-dlp stderr", "stderr", stderr.String())
+		slog.Warn("yt-dlp stderr", "stderr", stderr.String())
 		return Metadata{}, err
 	}
 
@@ -111,7 +111,7 @@ func GetPlaylistEntries(ctx context.Context, rawURL url.URL) ([]PlaylistEntry, e
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		slog.Info("yt-dlp stderr", "stderr", stderr.String())
+		slog.Warn("yt-dlp stderr", "stderr", stderr.String())
 		return nil, err
 	}
 
