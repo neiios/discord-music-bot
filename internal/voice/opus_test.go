@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"context"
 	"net/url"
 	"testing"
 
@@ -15,7 +16,7 @@ func TestExtractOpusPacketsE2E(t *testing.T) {
 		URL:         *videoURL,
 	}
 
-	song, err := downloader.DownloadSong(metadata)
+	song, err := downloader.DownloadSong(context.Background(), metadata)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

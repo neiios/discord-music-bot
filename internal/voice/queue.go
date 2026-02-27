@@ -7,14 +7,16 @@ import (
 )
 
 type Queue struct {
-	mu     sync.Mutex
-	songs  []downloader.Song
-	signal chan struct{}
+	mu       sync.Mutex
+	songs    []downloader.Song
+	signal   chan struct{}
+	consumed chan struct{}
 }
 
 func NewQueue() *Queue {
 	return &Queue{
-		signal: make(chan struct{}),
+		signal:   make(chan struct{}),
+		consumed: make(chan struct{}),
 	}
 }
 
@@ -41,6 +43,10 @@ func (q *Queue) Pop() (downloader.Song, bool) {
 
 	song := q.songs[0]
 	q.songs = q.songs[1:]
+
+	close(q.consumed)
+	q.consumed = make(chan struct{})
+
 	return song, true
 }
 
@@ -74,4 +80,11 @@ func (q *Queue) Signal() <-chan struct{} {
 	defer q.mu.Unlock()
 
 	return q.signal
+}
+
+func (q *Queue) Consumed() <-chan struct{} {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	return q.consumed
 }

@@ -31,15 +31,20 @@ type Manager struct {
 
 	skipMu     sync.Mutex
 	skipCancel context.CancelFunc
+
+	loaderMu      sync.Mutex
+	loaderCancels map[int64]context.CancelFunc
+	loaderNextID  int64
 }
 
 func NewManager(ctx context.Context, gw *gateway.Connection, env env.Env, apiClient *api.Client) *Manager {
 	m := &Manager{
-		env:       env,
-		gateway:   gw,
-		apiClient: apiClient,
-		channelID: env.MusicChannelId,
-		queue:     NewQueue(),
+		env:           env,
+		gateway:       gw,
+		apiClient:     apiClient,
+		channelID:     env.MusicChannelId,
+		queue:         NewQueue(),
+		loaderCancels: make(map[int64]context.CancelFunc),
 	}
 
 	go m.playLoop(ctx)
@@ -68,6 +73,13 @@ func (m *Manager) HandleSkip() {
 }
 
 func (m *Manager) HandleStop() {
+	m.loaderMu.Lock()
+	for _, cancel := range m.loaderCancels {
+		cancel()
+	}
+	m.loaderCancels = make(map[int64]context.CancelFunc)
+	m.loaderMu.Unlock()
+
 	m.queue.Clear()
 	m.HandleSkip()
 }
@@ -313,13 +325,50 @@ func (m *Manager) sendVoiceStateUpdate(ctx context.Context) error {
 	return m.gateway.SendEvent(ctx, event)
 }
 
-func (m *Manager) downloadAndQueue(ctx context.Context, url url.URL) {
-	metadata, err := downloader.GetSongMetadata(url)
+const maxPlaylistSize = 200
+
+func (m *Manager) registerLoader(cancel context.CancelFunc) int64 {
+	m.loaderMu.Lock()
+	defer m.loaderMu.Unlock()
+	id := m.loaderNextID
+	m.loaderNextID++
+	m.loaderCancels[id] = cancel
+	return id
+}
+
+func (m *Manager) unregisterLoader(id int64) {
+	m.loaderMu.Lock()
+	defer m.loaderMu.Unlock()
+	delete(m.loaderCancels, id)
+}
+
+func (m *Manager) downloadAndQueue(ctx context.Context, rawURL url.URL) {
+	entries, err := downloader.GetPlaylistEntries(ctx, rawURL)
 	if err != nil {
-		slog.Error("failed to get song metadata", "error", err, "url", url)
-		m.sendFeedback(fmt.Sprintf("Failed to get metadata for %s", url.String()))
+		slog.Error("failed to get playlist entries", "error", err, "url", rawURL)
+		m.sendFeedback(fmt.Sprintf("Failed to get metadata for %s", rawURL.String()))
 		return
 	}
+
+	if len(entries) == 1 {
+		metadata, err := entries[0].ToMetadata()
+		if err != nil {
+			slog.Error("failed to convert playlist entry to metadata", "error", err)
+			m.sendFeedback(fmt.Sprintf("Failed to get metadata for %s", rawURL.String()))
+			return
+		}
+		m.downloadSingle(ctx, metadata)
+		return
+	}
+
+	m.downloadPlaylist(ctx, entries)
+}
+
+func (m *Manager) downloadSingle(ctx context.Context, metadata downloader.Metadata) {
+	loaderCtx, loaderCancel := context.WithCancel(ctx)
+	defer loaderCancel()
+	loaderID := m.registerLoader(loaderCancel)
+	defer m.unregisterLoader(loaderID)
 
 	if metadata.DurationSec > 3*60*60 {
 		slog.Error("song too long", "duration", metadata.DurationSec, "title", metadata.Title)
@@ -327,11 +376,17 @@ func (m *Manager) downloadAndQueue(ctx context.Context, url url.URL) {
 		return
 	}
 
-	song, err := downloader.DownloadSong(metadata)
+	song, err := downloader.DownloadSong(loaderCtx, metadata)
 	if err != nil {
 		slog.Error("failed to download song", "error", err, "title", metadata.Title)
 		m.sendFeedback(fmt.Sprintf("Failed to download: %s", metadata.Title))
 		return
+	}
+
+	select {
+	case <-loaderCtx.Done():
+		return
+	default:
 	}
 
 	pos := m.queue.Add(song)
@@ -345,6 +400,69 @@ func (m *Manager) downloadAndQueue(ctx context.Context, url url.URL) {
 	}
 
 	slog.Info("queued song for playback", "title", song.Metadata.Title, "position", pos)
+}
+
+func (m *Manager) downloadPlaylist(ctx context.Context, entries []downloader.PlaylistEntry) {
+	if len(entries) > maxPlaylistSize {
+		m.sendFeedback(fmt.Sprintf("Playlist trimmed from %d to %d songs", len(entries), maxPlaylistSize))
+		entries = entries[:maxPlaylistSize]
+	}
+
+	m.sendFeedback(fmt.Sprintf("Loading playlist (%d songs)", len(entries)))
+
+	loaderCtx, loaderCancel := context.WithCancel(ctx)
+	defer loaderCancel()
+	loaderID := m.registerLoader(loaderCancel)
+	defer m.unregisterLoader(loaderID)
+
+	const preloadBuffer = 2
+	for i, entry := range entries {
+		// Wait until the queue has room.
+		for m.queue.Len() > preloadBuffer {
+			consumed := m.queue.Consumed()
+			select {
+			case <-consumed:
+			case <-loaderCtx.Done():
+				slog.Info("playlist loader cancelled", "loaded", i, "total", len(entries))
+				return
+			}
+		}
+
+		metadata, err := entry.ToMetadata()
+		if err != nil {
+			slog.Warn("playlist entry has no URL, skipping", "id", entry.ID, "title", entry.Title)
+			continue
+		}
+
+		metadata, err = downloader.GetSongMetadata(loaderCtx, metadata.URL)
+		if err != nil {
+			slog.Warn("failed to get metadata for playlist entry", "title", entry.Title, "error", err)
+			continue
+		}
+
+		if metadata.DurationSec > 3*60*60 {
+			slog.Warn("skipping playlist entry (>3h)", "title", metadata.Title, "duration", metadata.DurationSec)
+			continue
+		}
+
+		song, err := downloader.DownloadSong(loaderCtx, metadata)
+		if err != nil {
+			slog.Warn("failed to download playlist entry", "title", metadata.Title, "error", err)
+			continue
+		}
+
+		select {
+		case <-loaderCtx.Done():
+			slog.Info("playlist loader cancelled", "loaded", i, "total", len(entries))
+			return
+		default:
+		}
+
+		m.queue.Add(song)
+		slog.Info("queued playlist entry", "title", song.Metadata.Title, "index", i+1, "total", len(entries))
+	}
+
+	slog.Info("playlist loading complete", "total", len(entries))
 }
 
 func (m *Manager) sendFeedback(content string) {

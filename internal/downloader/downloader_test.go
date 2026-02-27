@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"bytes"
+	"context"
 	"net/url"
 	"testing"
 )
@@ -15,7 +16,7 @@ func TestGetSongMetadataE2E(t *testing.T) {
 			URL:         *url,
 		}
 
-		result, err := GetSongMetadata(*url)
+		result, err := GetSongMetadata(context.Background(), *url)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -26,7 +27,7 @@ func TestGetSongMetadataE2E(t *testing.T) {
 
 	t.Run("invalid URL", func(t *testing.T) {
 		invalidURL, _ := url.ParseRequestURI("https://www.youtube.com/watch?v=AAAAAAAAAAA")
-		_, err := GetSongMetadata(*invalidURL)
+		_, err := GetSongMetadata(context.Background(), *invalidURL)
 		if err == nil {
 			t.Errorf("expected error, got nil")
 		}
@@ -42,7 +43,7 @@ func TestDownloadSongE2E(t *testing.T) {
 			URL:         *url,
 		}
 
-		song, err := DownloadSong(metadata)
+		song, err := DownloadSong(context.Background(), metadata)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}

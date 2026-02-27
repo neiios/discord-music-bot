@@ -146,6 +146,48 @@ func TestSignalClosesOnAdd(t *testing.T) {
 	}
 }
 
+func TestConsumedSignalClosesOnPop(t *testing.T) {
+	q := NewQueue()
+	q.Add(song("A"))
+
+	consumed := q.Consumed()
+
+	select {
+	case <-consumed:
+		t.Fatal("consumed closed before any Pop")
+	default:
+	}
+
+	q.Pop()
+
+	select {
+	case <-consumed:
+	default:
+		t.Fatal("consumed not closed after Pop")
+	}
+
+	// New channel should be open.
+	consumed2 := q.Consumed()
+	select {
+	case <-consumed2:
+		t.Fatal("new consumed closed prematurely")
+	default:
+	}
+}
+
+func TestConsumedNotClosedOnAdd(t *testing.T) {
+	q := NewQueue()
+
+	consumed := q.Consumed()
+	q.Add(song("A"))
+
+	select {
+	case <-consumed:
+		t.Fatal("consumed closed after Add (should only close on Pop)")
+	default:
+	}
+}
+
 func TestConcurrentAccess(t *testing.T) {
 	q := NewQueue()
 	const n = 100
@@ -159,6 +201,7 @@ func TestConcurrentAccess(t *testing.T) {
 			_ = q.Len()
 			_ = q.List()
 			_ = q.Signal()
+			_ = q.Consumed()
 		}(i)
 	}
 	wg.Wait()
