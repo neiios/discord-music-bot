@@ -196,8 +196,11 @@ func TestSendRTPPacket(t *testing.T) {
 
 func TestWaitUntilConnected(t *testing.T) {
 	t.Run("returns immediately when ready", func(t *testing.T) {
+		readyCh := make(chan struct{})
+		close(readyCh)
 		conn := &Connection{
-			Ready: true,
+			Ready:   true,
+			readyCh: readyCh,
 		}
 
 		err := conn.WaitUntilConnected(1 * time.Second)
@@ -206,7 +209,8 @@ func TestWaitUntilConnected(t *testing.T) {
 
 	t.Run("times out when not ready", func(t *testing.T) {
 		conn := &Connection{
-			Ready: false,
+			Ready:   false,
+			readyCh: make(chan struct{}),
 		}
 
 		start := time.Now()
@@ -218,14 +222,17 @@ func TestWaitUntilConnected(t *testing.T) {
 	})
 
 	t.Run("returns when becomes ready", func(t *testing.T) {
+		readyCh := make(chan struct{})
 		conn := &Connection{
-			Ready: false,
+			Ready:   false,
+			readyCh: readyCh,
 		}
 
 		go func() {
 			time.Sleep(200 * time.Millisecond)
 			conn.Lock()
 			conn.Ready = true
+			close(readyCh)
 			conn.Unlock()
 		}()
 

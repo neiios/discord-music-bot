@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	payloadTypeOpus = 0x78
-	frameSize       = 960
-	frameDuration   = 20 * time.Millisecond
+	payloadTypeOpus  = 0x78
+	frameSize        = 960
+	frameDuration    = 20 * time.Millisecond
+	voiceGatewayVersion = "v=8"
 )
 
 var silenceFrame = []byte{0xF8, 0xFF, 0xFE}
@@ -88,6 +89,7 @@ type Connection struct {
 	sync.RWMutex
 
 	Ready    bool
+	readyCh  chan struct{}
 	OpusSend chan []byte
 
 	wsConn  *websocket.Conn
@@ -109,7 +111,8 @@ type Connection struct {
 	speaking     bool
 	reconnecting bool
 
-	close chan struct{}
+	close  chan struct{}
+	errCh  chan error
 
 	userID    string
 	guildID   string
@@ -134,9 +137,9 @@ func Connect(ctx context.Context, cfg ConnectionConfig) (*Connection, error) {
 		endpoint = "wss://" + endpoint
 	}
 	if !strings.Contains(endpoint, "?") {
-		endpoint = endpoint + "?v=8"
-	} else if !strings.Contains(endpoint, "v=8") {
-		endpoint = endpoint + "&v=8"
+		endpoint = endpoint + "?" + voiceGatewayVersion
+	} else if !strings.Contains(endpoint, voiceGatewayVersion) {
+		endpoint = endpoint + "&" + voiceGatewayVersion
 	}
 
 	wsConn, _, err := websocket.Dial(ctx, endpoint, nil)
@@ -147,6 +150,7 @@ func Connect(ctx context.Context, cfg ConnectionConfig) (*Connection, error) {
 
 	c := &Connection{
 		wsConn:      wsConn,
+		readyCh:     make(chan struct{}),
 		userID:      cfg.UserID,
 		guildID:     cfg.State.GuildID,
 		channelID:   cfg.State.ChannelID,
@@ -155,7 +159,8 @@ func Connect(ctx context.Context, cfg ConnectionConfig) (*Connection, error) {
 		endpoint:    cfg.Server.Endpoint,
 		mainGateway: cfg.MainGateway,
 		close:       make(chan struct{}),
-		OpusSend:    make(chan []byte, 2),
+		errCh:       make(chan error, 1),
+		OpusSend:    make(chan []byte, 2), // small buffer to decouple opus encoding from sending
 	}
 	c.seqAck.Store(-1)
 
@@ -194,21 +199,11 @@ func (c *Connection) Close() {
 }
 
 func (c *Connection) WaitUntilConnected(timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		c.RLock()
-		ready := c.Ready
-		c.RUnlock()
-
-		if ready {
-			return nil
-		}
-
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for voice connection")
-		}
-
-		time.Sleep(100 * time.Millisecond)
+	select {
+	case <-c.readyCh:
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("timeout waiting for voice connection")
 	}
 }
 
@@ -309,6 +304,7 @@ func (c *Connection) establish(ctx context.Context, state gateway.VoiceState, se
 
 			c.Lock()
 			c.Ready = true
+			close(c.readyCh)
 			c.Unlock()
 
 			slog.Info("voice connection established", "mode", c.mode)
@@ -403,13 +399,19 @@ func (c *Connection) setupUDP(ctx context.Context, ready voiceReady, mode string
 	c.udpAddr = remoteAddr
 	c.ssrc = ready.SSRC
 
-	seed := rand.New(rand.NewSource(time.Now().UnixNano()))
-	c.sequence = uint16(seed.Uint32())
-	c.timestamp = seed.Uint32()
-	c.nonce = seed.Uint32()
+	c.sequence = uint16(rand.Uint32())
+	c.timestamp = rand.Uint32()
+	c.nonce = rand.Uint32()
 
 	slog.Info("UDP connection established", "localIP", ip, "localPort", port)
 	return nil
+}
+
+func (c *Connection) reportError(err error) {
+	select {
+	case c.errCh <- err:
+	default:
+	}
 }
 
 func (c *Connection) wsHeartbeat(interval time.Duration) {
@@ -427,6 +429,7 @@ func (c *Connection) wsHeartbeat(interval time.Duration) {
 			payload := voiceHeartbeatPayload{T: nonce, SeqAck: int(c.seqAck.Load())}
 			if err := c.sendEvent(context.Background(), 3, payload); err != nil {
 				slog.Error("voice heartbeat failed", "error", err)
+				c.reportError(err)
 				go c.reconnect()
 				return
 			}
@@ -461,6 +464,7 @@ func (c *Connection) wsListen() {
 					return
 				}
 				slog.Error("voice gateway read failed", "error", err)
+				c.reportError(err)
 				go c.reconnect()
 				return
 			}
@@ -504,6 +508,7 @@ func (c *Connection) udpKeepAlive() {
 
 			if _, err := udpConn.Write(packet); err != nil {
 				slog.Error("UDP keepalive failed", "error", err)
+				c.reportError(err)
 				return
 			}
 			slog.Debug("UDP keepalive sent")
@@ -536,6 +541,7 @@ func (c *Connection) opusSender() {
 
 			if err := c.sendRTPPacket(frame); err != nil {
 				slog.Error("failed to send RTP packet", "error", err)
+				c.reportError(err)
 				go c.reconnect()
 				return
 			}
@@ -601,10 +607,11 @@ func (c *Connection) reconnect() {
 
 	c.Close()
 
+	const maxAttempts = 10
 	wait := time.Duration(1) * time.Second
 	maxWait := time.Duration(600) * time.Second
 
-	for attempt := 1; ; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		time.Sleep(wait)
 
 		c.RLock()
@@ -619,23 +626,7 @@ func (c *Connection) reconnect() {
 		slog.Info("reconnection attempt", "attempt", attempt, "wait", wait)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
-		data, err := json.Marshal(VoiceStateUpdateData{
-			ChannelID: c.channelID,
-			GuildID:   c.guildID,
-			SelfMute:  false,
-			SelfDeaf:  false,
-		})
-		if err != nil {
-			cancel()
-			slog.Error("failed to marshal voice state update", "error", err)
-			continue
-		}
-
-		rawData := json.RawMessage(data)
-		event := gateway.Event{Opcode: 4, Data: &rawData}
-		if err := mainGateway.SendEvent(ctx, event); err != nil {
-			cancel()
+		if err := sendVoiceStateUpdate(ctx, mainGateway, c.guildID, c.channelID); err != nil {
 			slog.Error("failed to send voice state update for reconnection", "error", err)
 		} else {
 			slog.Info("sent voice state update for reconnection")
@@ -647,6 +638,8 @@ func (c *Connection) reconnect() {
 			wait = maxWait
 		}
 	}
+
+	slog.Error("voice reconnection failed after max attempts", "maxAttempts", maxAttempts)
 }
 
 func (c *Connection) readEvent(ctx context.Context) (voiceEvent, error) {

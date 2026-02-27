@@ -2,7 +2,6 @@ package voice
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -27,6 +26,7 @@ type Manager struct {
 	voiceState  *gateway.VoiceState
 	voiceServer *gateway.VoiceServerUpdate
 	voiceConn   *Connection
+	voiceReady  chan struct{}
 	nowPlaying  *downloader.Song
 
 	skipMu     sync.Mutex
@@ -44,6 +44,7 @@ func NewManager(ctx context.Context, gw *gateway.Connection, env env.Env, apiCli
 		apiClient:     apiClient,
 		channelID:     env.MusicChannelId,
 		queue:         NewQueue(),
+		voiceReady:    make(chan struct{}),
 		loaderCancels: make(map[int64]context.CancelFunc),
 	}
 
@@ -123,6 +124,7 @@ func (m *Manager) HandleVoiceStateUpdate(state gateway.VoiceState) {
 		m.voiceConn.Close()
 		m.voiceConn = nil
 	}
+	m.signalVoiceReady()
 }
 
 func (m *Manager) HandleVoiceServerUpdate(update gateway.VoiceServerUpdate) {
@@ -138,6 +140,13 @@ func (m *Manager) HandleVoiceServerUpdate(update gateway.VoiceServerUpdate) {
 		m.voiceConn.Close()
 		m.voiceConn = nil
 	}
+	m.signalVoiceReady()
+}
+
+func (m *Manager) setNowPlaying(s *downloader.Song) {
+	m.mu.Lock()
+	m.nowPlaying = s
+	m.mu.Unlock()
 }
 
 func (m *Manager) playLoop(ctx context.Context) {
@@ -155,25 +164,19 @@ func (m *Manager) playLoop(ctx context.Context) {
 				break
 			}
 
-			m.mu.Lock()
-			m.nowPlaying = &song
-			m.mu.Unlock()
+			m.setNowPlaying(&song)
 
 			conn, err := m.ensureVoiceConnection(ctx)
 			if err != nil {
 				slog.Error("failed to establish voice connection", "error", err)
-				m.mu.Lock()
-				m.nowPlaying = nil
-				m.mu.Unlock()
+				m.setNowPlaying(nil)
 				continue
 			}
 
 			packets, err := ExtractOpusPackets(song.Audio)
 			if err != nil {
 				slog.Error("failed to extract opus packets", "error", err)
-				m.mu.Lock()
-				m.nowPlaying = nil
-				m.mu.Unlock()
+				m.setNowPlaying(nil)
 				continue
 			}
 
@@ -207,9 +210,7 @@ func (m *Manager) playLoop(ctx context.Context) {
 				slog.Warn("failed to turn off speaking", "error", err)
 			}
 
-			m.mu.Lock()
-			m.nowPlaying = nil
-			m.mu.Unlock()
+			m.setNowPlaying(nil)
 
 			slog.Info("playback complete", "title", song.Metadata.Title)
 		}
@@ -261,6 +262,7 @@ func (m *Manager) ensureVoiceConnection(ctx context.Context) (*Connection, error
 		state := m.voiceState
 		server := m.voiceServer
 		existingConn := m.voiceConn
+		ch := m.voiceReady
 		m.mu.Unlock()
 
 		if existingConn != nil {
@@ -299,7 +301,18 @@ func (m *Manager) ensureVoiceConnection(ctx context.Context) (*Connection, error
 		select {
 		case <-waitCtx.Done():
 			return nil, fmt.Errorf("timed out waiting for voice server/state")
-		case <-time.After(150 * time.Millisecond):
+		case <-ch:
+		}
+	}
+}
+
+// Must be called with m.mu held.
+func (m *Manager) signalVoiceReady() {
+	if m.voiceState != nil && m.voiceServer != nil {
+		select {
+		case <-m.voiceReady:
+		default:
+			close(m.voiceReady)
 		}
 	}
 }
@@ -307,25 +320,16 @@ func (m *Manager) ensureVoiceConnection(ctx context.Context) (*Connection, error
 func (m *Manager) sendVoiceStateUpdate(ctx context.Context) error {
 	m.mu.Lock()
 	alreadyJoined := m.voiceState != nil && m.voiceState.ChannelID == m.env.VoiceChannelId
+	if !alreadyJoined {
+		m.voiceReady = make(chan struct{})
+	}
 	m.mu.Unlock()
 
 	if alreadyJoined {
 		return nil
 	}
 
-	data, err := json.Marshal(VoiceStateUpdateData{
-		ChannelID: m.env.VoiceChannelId,
-		GuildID:   m.env.GuildId,
-		SelfMute:  false,
-		SelfDeaf:  false,
-	})
-	if err != nil {
-		return err
-	}
-
-	rawData := json.RawMessage(data)
-	event := gateway.Event{Opcode: 4, Data: &rawData}
-	return m.gateway.SendEvent(ctx, event)
+	return sendVoiceStateUpdate(ctx, m.gateway, m.env.GuildId, m.env.VoiceChannelId)
 }
 
 const maxPlaylistSize = 200
@@ -423,7 +427,6 @@ func (m *Manager) downloadPlaylist(ctx context.Context, entries []downloader.Pla
 
 	const preloadBuffer = 2
 	for i, entry := range entries {
-		// Wait until the queue has room.
 		for m.queue.Len() > preloadBuffer {
 			consumed := m.queue.Consumed()
 			select {
