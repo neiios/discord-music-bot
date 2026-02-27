@@ -68,7 +68,7 @@ func NewConnection(ctx context.Context, client api.GatewayURLProvider, token str
 			Browser: "templeos",
 			Device:  "templeos",
 		},
-		Intents: (1 << 0) | (1 << 7) | (1 << 9) | (1 << 10) | (1 << 15),
+		Intents: IntentGuilds | IntentGuildVoiceStates | IntentGuildMessages | IntentMessageContent | IntentGuildMessageTyping,
 	}
 
 	if err := connection.sendIdentify(ctx, identify); err != nil {
@@ -106,7 +106,7 @@ func (g *Connection) ReadEvent(ctx context.Context) (Event, error) {
 	if event.SequenceNumber != nil {
 		g.LastSequenceNumber = event.SequenceNumber
 	}
-	slog.Info("received event", "event", event)
+	slog.Debug("received event", "event", event)
 	return event, nil
 }
 
@@ -142,32 +142,20 @@ func (g *Connection) startHeartbeat(ctx context.Context, interval int) {
 	}()
 }
 
-func (g *Connection) sendHeartbeat(ctx context.Context) error {
-	d, err := json.Marshal(g.LastSequenceNumber)
+func (g *Connection) SendPayload(ctx context.Context, opcode int, payload any) error {
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	raw := json.RawMessage(d)
-	event := Event{Opcode: 1, Data: &raw}
-	if err := g.SendEvent(ctx, event); err != nil {
-		return err
-	}
-	slog.Info("sent heartbeat", "event", event)
-	return nil
+	raw := json.RawMessage(data)
+	event := Event{Opcode: opcode, Data: &raw}
+	return g.SendEvent(ctx, event)
+}
+
+func (g *Connection) sendHeartbeat(ctx context.Context) error {
+	return g.SendPayload(ctx, 1, g.LastSequenceNumber)
 }
 
 func (g *Connection) sendIdentify(ctx context.Context, identify Identify) error {
-	payload, err := json.Marshal(identify)
-	if err != nil {
-		return err
-	}
-	d := json.RawMessage(payload)
-	event := Event{Opcode: 2, Data: &d}
-
-	if err = g.SendEvent(ctx, event); err != nil {
-		slog.Error("sending identify failed", "error", err)
-		return err
-	}
-	slog.Info("sent identify event", "event", event)
-	return nil
+	return g.SendPayload(ctx, 2, identify)
 }

@@ -2,6 +2,14 @@ package gateway
 
 import "encoding/json"
 
+const (
+	IntentGuilds             = 1 << 0
+	IntentGuildVoiceStates   = 1 << 7
+	IntentGuildMessages      = 1 << 9
+	IntentMessageContent     = 1 << 10
+	IntentGuildMessageTyping = 1 << 15
+)
+
 type Event struct {
 	Opcode         int              `json:"op"`
 	SequenceNumber *int             `json:"s"`
